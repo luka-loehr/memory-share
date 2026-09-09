@@ -86,11 +86,12 @@ export async function POST(request: Request) {
       return json({ error: 'size_mismatch' }, { status: 400 });
     }
 
+    // Only a `view` moves the state. A poster frame that landed before the
+    // proxy would otherwise mark the asset ready with `view_key` still NULL —
+    // precisely the state `derive_state` exists to tell apart.
     const column = columnFor(session.role);
-    const updated = await env.DB.prepare(
-      `UPDATE assets SET ${column} = ?1, derive_state = 'ready', derive_error = NULL
-        WHERE id = ?2`,
-    )
+    const flip = session.role === 'view' ? `, derive_state = 'ready', derive_error = NULL` : '';
+    const updated = await env.DB.prepare(`UPDATE assets SET ${column} = ?1${flip} WHERE id = ?2`)
       .bind(session.key, parentId)
       .run();
 
@@ -125,14 +126,17 @@ export async function POST(request: Request) {
   const meta = session.meta;
   if (!meta) return json({ error: 'bad_request' }, { status: 400 });
 
-  // Photos never derive: the Images binding renders them at read time.
-  // A video is pending until its locally-encoded proxy follows.
-  const deriveState = meta.kind === 'video' ? 'pending' : 'skipped';
+  // Photos never derive: the Images binding renders them at read time. A video
+  // whose original is already browser-safe IS its own view and no proxy will
+  // follow, so it is complete on arrival. Everything else is pending until its
+  // locally-encoded proxy lands.
+  const deriveState = meta.kind === 'video' && !meta.viewIsOriginal ? 'pending' : 'skipped';
 
   await env.DB.prepare(
     `INSERT INTO assets (id, filename, kind, mime, bytes, width, height, duration,
-                         taken_at, orig_key, derive_state, created_at)
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                         taken_at, orig_key, view_key, view_is_original,
+                         derive_state, created_at)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
      ON CONFLICT (id) DO NOTHING`,
   )
     .bind(
@@ -146,6 +150,10 @@ export async function POST(request: Request) {
       meta.duration,
       meta.takenAt,
       session.key,
+      // The one write that sets the flag, in the same statement that creates
+      // the row — there is no later moment at which it could be inferred.
+      meta.viewIsOriginal ? session.key : null,
+      meta.viewIsOriginal ? 1 : 0,
       deriveState,
       Math.floor(Date.now() / 1000),
     )

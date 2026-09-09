@@ -45,18 +45,37 @@ export interface Memory {
   assets?: Asset[];
 }
 
+/**
+ * What an upload IS. Omitted or 'orig' creates an asset row at orig/<sha256>;
+ * 'view' or 'thumb' writes a derivative named after its PARENT and creates no
+ * row at all, which is what keeps a proxy from ever appearing in `ms ls`.
+ */
+export type UploadRole = 'orig' | 'view' | 'thumb';
+
 /** POST /api/admin/upload/begin */
 export interface BeginBody {
+  /** For a derivative this is the derivative's own hash — an integrity check only. */
   sha256: string;
   filename: string;
   bytes: number;
   mime: string;
+  role?: UploadRole;
+  /** REQUIRED when role is 'view' or 'thumb': the ORIGINAL's sha256. */
+  ofAsset?: string;
   /** Locally probed, and contracted as optional on `begin`. */
   width?: number;
   height?: number;
   duration?: number;
   takenAt?: number;
   kind?: AssetKind;
+  /**
+   * Set for a video whose original is already browser-safe, so no view
+   * derivative follows. NOT in the contract — see NOTES.md. Without it the
+   * worker cannot distinguish "no proxy is coming" from "the proxy has not
+   * arrived yet", and such a video stays `derive_state='pending'` forever.
+   * Inert for a worker that ignores it.
+   */
+  viewIsOriginal?: boolean;
 }
 
 export interface BeginResponse {
@@ -84,18 +103,14 @@ export interface UploadedPart {
 }
 
 export interface CompleteBody {
-  assetId: string;
   uploadId: string;
   parts: UploadedPart[];
-  /**
-   * Where this asset's browser-playable proxy lives, for videos the CLI has
-   * transcoded locally. Absent for photos and for video that needed no proxy.
-   */
-  viewKey?: string;
 }
 
+/** `{asset}` for an original, `{ok}` for a derivative. */
 export interface CompleteResponse {
-  asset: Asset;
+  asset?: Asset;
+  ok?: boolean;
 }
 
 export interface AssetsResponse {

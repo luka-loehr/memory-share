@@ -9,14 +9,16 @@ import {
   decideView,
   encodeArgs,
   hasFaststart,
+  IMAGES_MAX_BYTES,
+  MAX_PHOTO_VIEW_EDGE,
   MAX_VIEW_HEIGHT,
   MAX_VIEW_WIDTH,
   parseProgress,
+  photoNeedsView,
+  photoViewArgs,
   posterArgs,
-  posterKeyFor,
   scaleToFit,
   type VideoStreamInfo,
-  viewKeyFor,
 } from '../src/core/transcode.ts';
 
 function info(overrides: Partial<VideoStreamInfo> = {}): VideoStreamInfo {
@@ -216,11 +218,41 @@ describe('parseProgress', () => {
   });
 });
 
-describe('derivative keys', () => {
-  test('are keyed on the original hash, per the R2 layout', () => {
-    const sha = 'a'.repeat(64);
-    expect(viewKeyFor(sha)).toBe(`view/${sha}.mp4`);
-    expect(posterKeyFor(sha)).toBe(`thumb/${sha}.jpg`);
+describe('photoNeedsView', () => {
+  test('only photos above the 20 MB Images cap get a stored view', () => {
+    expect(photoNeedsView(5_000_000)).toBe(false);
+    expect(photoNeedsView(IMAGES_MAX_BYTES)).toBe(false);
+    expect(photoNeedsView(IMAGES_MAX_BYTES + 1)).toBe(true);
+    expect(photoNeedsView(60_000_000)).toBe(true);
+  });
+
+  test('the threshold is the decimal 20 MB, which errs small on purpose', () => {
+    // A file the edge would reject must never be left without a view; a file it
+    // would have accepted merely gains one it did not need.
+    expect(IMAGES_MAX_BYTES).toBe(20_000_000);
+    expect(photoNeedsView(20 * 1024 * 1024)).toBe(true);
+  });
+});
+
+describe('photoViewArgs', () => {
+  test('bounds the longest edge without upscaling a smaller photo', () => {
+    const args = photoViewArgs('in.jpg', 'out.jpg');
+    const filter = args[args.indexOf('-vf') + 1] ?? '';
+    expect(filter).toContain(`min(${MAX_PHOTO_VIEW_EDGE},iw)`);
+    expect(filter).toContain(`min(${MAX_PHOTO_VIEW_EDGE},ih)`);
+    expect(filter).toContain('force_original_aspect_ratio=decrease');
+  });
+
+  test('strips metadata, so a view rendition carries no GPS coordinates', () => {
+    const args = photoViewArgs('in.jpg', 'out.jpg');
+    expect(args[args.indexOf('-map_metadata') + 1]).toBe('-1');
+  });
+
+  test('writes a single high-quality JPEG frame', () => {
+    const args = photoViewArgs('in.jpg', 'out.jpg');
+    expect(args[args.indexOf('-frames:v') + 1]).toBe('1');
+    expect(args[args.indexOf('-f') + 1]).toBe('image2');
+    expect(args.at(-1)).toBe('out.jpg');
   });
 });
 

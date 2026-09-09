@@ -65,7 +65,7 @@ exclusively by the CLI. Never reachable from a share page.
 
 | method | path | body / query | returns |
 |---|---|---|---|
-| `POST` | `/api/admin/upload/begin` | `{sha256, filename, bytes, mime, role?, ofAsset?}` + optional `{width, height, duration, takenAt, kind}` | `{assetId, exists, uploadId?}` — `exists:true` short-circuits a duplicate |
+| `POST` | `/api/admin/upload/begin` | `{sha256, filename, bytes, mime, role?, ofAsset?, viewIsOriginal?}` + optional `{width, height, duration, takenAt, kind}` | `{assetId, exists, uploadId?, asset?}` — `exists:true` short-circuits a duplicate and returns the existing row |
 | `PUT` | `/api/admin/upload/part` | `?uploadId=&part=` + body | `{etag}` |
 | `GET` | `/api/admin/upload/:uploadId/parts` | | `{parts:[{part, etag, size}]}` — lets an interrupted multipart resume |
 | `POST` | `/api/admin/upload/complete` | `{uploadId, parts[]}` | `{asset}` for an original, `{ok}` for a derivative |
@@ -130,8 +130,31 @@ verify the bytes arrived intact. It never appears in a key.
 no row is rejected with 409 rather than orphaned.
 
 This is why `complete` no longer carries a `viewKey` — the derivative's own
-completion writes it. There is one way for bytes to reach a derivative key, and
-no path by which a proxy can accidentally become a standalone asset.
+completion writes it. `complete` is exactly `{uploadId, parts[]}`. There is one
+way for bytes to reach a derivative key, and no path by which a proxy can
+accidentally become a standalone asset.
+
+**Only `role:'view'` moves `derive_state` to `'ready'`.** A poster landing
+first sets `thumb_key` and nothing else — otherwise an asset would read as
+ready with `view_key` still NULL, which is precisely the state the field exists
+to distinguish.
+
+**Derivatives never short-circuit**, because a derivative's own hash is not
+persisted and the server therefore cannot tell a current encode from a stale
+one. `begin` always returns `exists:false` for `role:'view'|'thumb'`.
+
+Re-encoding on every re-run would still be intolerable on a large library, so
+the skip decision belongs to the client, where the encode cost is paid: when
+`begin` for an ORIGINAL returns `exists:true`, it also returns the existing
+`asset` row. If that row already has the `view_key` / `thumb_key` the CLI was
+about to produce, the CLI skips both the encode and the upload. The server stays
+stateless about encoder versions; the client stays cheap to re-run.
+
+**`view_is_original` is declared on the ORIGINAL's `begin`**, via
+`viewIsOriginal: true` — not implied by a derivative, since in that case no
+derivative is ever uploaded. The server then sets `view_key = orig_key`,
+`view_is_original = 1`, and `derive_state = 'skipped'` in the same write that
+creates the row. This is the only path that sets the flag.
 
 ## No server-side derivation
 

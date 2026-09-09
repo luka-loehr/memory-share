@@ -26,12 +26,12 @@ import {
   decideView,
   encodeProxy,
   extractPoster,
-  posterKeyFor,
+  photoNeedsView,
   probeVideo,
+  renderPhotoView,
   type VideoStreamInfo,
-  viewKeyFor,
 } from '../core/transcode.ts';
-import type { BeginBody, UploadedPart } from '../core/types.ts';
+import type { BeginBody, UploadedPart, UploadRole } from '../core/types.ts';
 import { mapPool, type WalkedFile, walkPaths } from '../core/walk.ts';
 import { cyan, dim, yellow } from '../ui/color.ts';
 import { countAndSize, formatBytes, formatDuration, formatRate, plural } from '../ui/format.ts';
@@ -56,12 +56,23 @@ interface Candidate extends WalkedFile {
   kind: 'photo' | 'video';
 }
 
-/** What the transcode phase produced for one video, if anything. */
-interface Proxy {
-  viewKey: string;
-  proxyPath: string | null;
+/**
+ * What the local-processing phase produced for one asset.
+ *
+ * Keys are not built here: a derivative names its parent and its role, and the
+ * worker decides where the bytes land. That is what makes it impossible for the
+ * CLI to accidentally write a proxy to a standalone asset key.
+ */
+interface Derived {
+  /** The 1080p H.264 proxy, or the bounded JPEG for an oversize photo. */
+  viewPath: string | null;
+  viewMime: string;
+  /** Video poster frame. Photos never get one — thumb/ is video-only. */
   posterPath: string | null;
+  /** The original is already browser-safe; no view derivative is uploaded. */
   viewIsOriginal: boolean;
+  /** An oversize photo ffmpeg could not decode: original only, no view. */
+  undecodable: boolean;
   reason: string;
 }
 
@@ -75,6 +86,8 @@ interface Outcome {
   status: 'uploaded' | 'skipped' | 'failed';
   stage?: 'transcode' | 'upload';
   deriveState?: 'ready' | 'skipped';
+  /** An oversize photo that could not be rendered; uploaded without a view. */
+  noView?: boolean;
   error?: string;
 }
 
@@ -114,14 +127,45 @@ export async function upload(args: ParsedArgs): Promise<number> {
   const probeEnabled = getBool(args, 'probe', true);
   await warnAboutMissingProbes(probeEnabled, work, json);
 
-  // ------------------------------------------------------------- transcode --
-  const proxies = new Map<string, Proxy>();
+  // Ask once what the pool already holds. Encoding is the most expensive thing
+  // this CLI does, and re-running a finished import must not re-encode a
+  // library only to discover at `begin` that every file was already there.
+  const alreadyInPool = await client
+    .listAllAssets({})
+    .then((assets) => new Set(assets.map((asset) => asset.id)))
+    .catch(() => new Set<string>());
+
+  // ---------------------------------------------------- local processing ----
+  const derived = new Map<string, Derived>();
   const transcodeFailures: Outcome[] = [];
-  if (videos.length > 0 && transcodeEnabled) {
+  const fresh = work.filter((candidate) => !alreadyInPool.has(candidate.sha256));
+  const freshVideos = fresh.filter((candidate) => candidate.kind === 'video');
+  const oversizePhotos = fresh.filter(
+    (candidate) => candidate.kind === 'photo' && photoNeedsView(candidate.bytes),
+  );
+
+  if (alreadyInPool.size > 0 && fresh.length < work.length && !json) {
+    const known = work.length - fresh.length;
+    out.note(
+      `${known} of ${work.length} already in the pool — not re-processing ${known === 1 ? 'it' : 'them'}.`,
+    );
+  }
+
+  if ((freshVideos.length > 0 && transcodeEnabled) || oversizePhotos.length > 0) {
     await announceEncoder(json);
-    await transcodeAll(videos, jobs, json, proxies, transcodeFailures);
-  } else if (videos.length > 0 && !json) {
-    out.warn(`--no-transcode: ${videos.length} video(s) upload without a browser-playable proxy.`);
+    await processLocally(
+      transcodeEnabled ? freshVideos : [],
+      oversizePhotos,
+      jobs,
+      json,
+      derived,
+      transcodeFailures,
+    );
+  }
+  if (freshVideos.length > 0 && !transcodeEnabled && !json) {
+    out.warn(
+      `--no-transcode: ${freshVideos.length} video(s) upload without a browser-playable proxy.`,
+    );
   }
 
   // ---------------------------------------------------------------- upload --
@@ -143,7 +187,7 @@ export async function upload(args: ParsedArgs): Promise<number> {
       outcomes.push(
         await uploadOne({
           candidate,
-          proxy: proxies.get(candidate.sha256) ?? null,
+          derived: derived.get(candidate.sha256) ?? null,
           client,
           gate,
           partSize,
@@ -169,8 +213,9 @@ export async function upload(args: ParsedArgs): Promise<number> {
       skipped: skipped.length,
       failed: failed.length,
       duplicatesInBatch,
-      transcoded: [...proxies.values()].filter((proxy) => !proxy.viewIsOriginal).length,
-      reusedOriginal: [...proxies.values()].filter((proxy) => proxy.viewIsOriginal).length,
+      transcoded: [...derived.values()].filter((d) => d.viewPath !== null).length,
+      reusedOriginal: [...derived.values()].filter((d) => d.viewIsOriginal).length,
+      photosWithoutView: outcomes.filter((outcome) => outcome.noView === true).length,
       tagged,
       tags,
       bytes: uploaded.reduce((sum, outcome) => sum + outcome.bytes, 0),
@@ -180,7 +225,7 @@ export async function upload(args: ParsedArgs): Promise<number> {
     return failed.length > 0 ? EXIT.api : 0;
   }
 
-  reportSummary({ uploaded, skipped, failed, duplicatesInBatch, proxies, tags, tagged, summary });
+  reportSummary({ uploaded, skipped, failed, duplicatesInBatch, derived, tags, tagged, summary });
   return failed.length > 0 ? EXIT.api : 0;
 }
 
@@ -242,79 +287,40 @@ async function hashAll(
 }
 
 /**
- * Encodes every video that needs a proxy.
+ * Everything that happens on this machine before a byte goes over the wire:
+ * video proxies, video poster frames, and bounded view renditions for photos
+ * the edge cannot transform.
  *
- * Transcoding is the slow part of any large import, so a failure here is
- * granular by construction: one video that ffmpeg cannot read is recorded and
- * the batch carries on. Aborting an overnight import of four hundred clips
- * because clip 212 has a broken index would be indefensible.
+ * Failure here is granular by construction. One clip ffmpeg cannot read is
+ * recorded and the batch carries on — aborting an overnight import of four
+ * hundred videos because clip 212 has a broken index would be indefensible.
  */
-async function transcodeAll(
+async function processLocally(
   videos: readonly Candidate[],
+  oversizePhotos: readonly Candidate[],
   jobs: number,
   json: boolean,
-  proxies: Map<string, Proxy>,
+  derived: Map<string, Derived>,
   failures: Outcome[],
 ): Promise<void> {
-  const totalSeconds = new Map<string, number>();
+  const work = [...videos, ...oversizePhotos];
+  if (work.length === 0) return;
+
   const progress = new Progress({
     verb: 'Encoding',
-    totalFiles: videos.length,
-    // Progress is measured in seconds of footage, not bytes: an encode's
-    // position is a timestamp, and source size predicts nothing about it.
-    totalBytes: 0,
+    totalFiles: work.length,
+    // Progress is counted in percent-of-file, not bytes: an encode's position
+    // is a timestamp, and source size predicts nothing about how long it takes.
+    totalBytes: work.length * 100,
     tty: json ? false : undefined,
   });
 
   try {
-    await mapPool(videos, jobs, async (candidate) => {
+    await mapPool(work, jobs, async (candidate) => {
       progress.start(candidate.sha256, candidate.name, 100);
-      let info: VideoStreamInfo | null = null;
       try {
-        info = await probeVideo(candidate.path);
-        if (info === null) throw new CliError('ffprobe could not read the file.');
-
-        const decision = decideView(info);
-        totalSeconds.set(candidate.sha256, info.duration);
-
-        if (decision.action === 'reuse-original') {
-          proxies.set(candidate.sha256, {
-            viewKey: `orig/${candidate.sha256}`,
-            proxyPath: null,
-            posterPath: await extractPoster(candidate.path, candidate.sha256, info.duration),
-            viewIsOriginal: true,
-            reason: decision.reason,
-          });
-          progress.advance(candidate.sha256, 100);
-          progress.finish(candidate.sha256, 'skipped', candidate.name, decision.reason);
-          return;
-        }
-
-        let last = 0;
-        const result = await encodeProxy(candidate.path, candidate.sha256, info, (fraction) => {
-          const next = Math.round(fraction * 100);
-          if (next > last) {
-            progress.advance(candidate.sha256, next - last);
-            last = next;
-          }
-        });
-        if (last < 100) progress.advance(candidate.sha256, 100 - last);
-
-        proxies.set(candidate.sha256, {
-          viewKey: viewKeyFor(candidate.sha256),
-          proxyPath: result.path,
-          posterPath: await extractPoster(candidate.path, candidate.sha256, info.duration),
-          viewIsOriginal: false,
-          reason: decision.reason,
-        });
-        progress.finish(
-          candidate.sha256,
-          'uploaded',
-          candidate.name,
-          `${result.width}×${result.height} ${formatBytes(result.bytes)}${
-            result.seconds > 0 ? ` in ${formatDuration(result.seconds)}` : ' (cached)'
-          }`,
-        );
+        if (candidate.kind === 'photo') await derivePhoto(candidate, derived, progress);
+        else await deriveVideo(candidate, derived, progress);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         progress.finish(candidate.sha256, 'failed', candidate.name, message);
@@ -324,7 +330,7 @@ async function transcodeAll(
           sha256: candidate.sha256,
           assetId: null,
           bytes: candidate.bytes,
-          kind: 'video',
+          kind: candidate.kind,
           status: 'failed',
           stage: 'transcode',
           error: message,
@@ -336,9 +342,99 @@ async function transcodeAll(
   }
 }
 
+async function deriveVideo(
+  candidate: Candidate,
+  derived: Map<string, Derived>,
+  progress: Progress,
+): Promise<void> {
+  const info: VideoStreamInfo | null = await probeVideo(candidate.path);
+  if (info === null) throw new CliError('ffprobe could not read the file.');
+
+  const decision = decideView(info);
+  const poster = await extractPoster(candidate.path, candidate.sha256, info.duration);
+
+  if (decision.action === 'reuse-original') {
+    derived.set(candidate.sha256, {
+      viewPath: null,
+      viewMime: 'video/mp4',
+      posterPath: poster,
+      viewIsOriginal: true,
+      undecodable: false,
+      reason: decision.reason,
+    });
+    progress.advance(candidate.sha256, 100);
+    progress.finish(candidate.sha256, 'skipped', candidate.name, decision.reason);
+    return;
+  }
+
+  let last = 0;
+  const result = await encodeProxy(candidate.path, candidate.sha256, info, (fraction) => {
+    const next = Math.round(fraction * 100);
+    if (next > last) {
+      progress.advance(candidate.sha256, next - last);
+      last = next;
+    }
+  });
+  if (last < 100) progress.advance(candidate.sha256, 100 - last);
+
+  derived.set(candidate.sha256, {
+    viewPath: result.path,
+    viewMime: 'video/mp4',
+    posterPath: poster,
+    viewIsOriginal: false,
+    undecodable: false,
+    reason: decision.reason,
+  });
+  progress.finish(
+    candidate.sha256,
+    'uploaded',
+    candidate.name,
+    `${result.width}×${result.height} ${formatBytes(result.bytes)}${
+      result.seconds > 0 ? ` in ${formatDuration(result.seconds)}` : ' (cached)'
+    }`,
+  );
+}
+
+/**
+ * A photo above the Images 20 MB input cap gets a bounded JPEG so the share
+ * page has something to show. If ffmpeg cannot decode it — ProRAW DNG is the
+ * realistic case — that is recorded rather than thrown: the original still
+ * uploads, the asset simply has no view, and the edge answers 415 with a
+ * placeholder rather than handing over the full-resolution file.
+ */
+async function derivePhoto(
+  candidate: Candidate,
+  derived: Map<string, Derived>,
+  progress: Progress,
+): Promise<void> {
+  const rendered = await renderPhotoView(candidate.path, candidate.sha256);
+  progress.advance(candidate.sha256, 100);
+
+  derived.set(candidate.sha256, {
+    viewPath: rendered,
+    viewMime: 'image/jpeg',
+    posterPath: null,
+    viewIsOriginal: false,
+    undecodable: rendered === null,
+    reason: rendered === null ? 'ffmpeg could not decode it' : 'above the 20 MB Images cap',
+  });
+
+  if (rendered === null) {
+    progress.finish(
+      candidate.sha256,
+      'failed',
+      candidate.name,
+      'cannot decode; uploading the original alone',
+    );
+    return;
+  }
+  const bytes = (await Bun.file(rendered).stat()).size;
+  progress.finish(candidate.sha256, 'uploaded', candidate.name, `view ${formatBytes(bytes)}`);
+}
+
 interface UploadOneInput {
   candidate: Candidate;
-  proxy: Proxy | null;
+  derived: Derived | null;
   client: ApiClient;
   gate: Semaphore;
   partSize: number;
@@ -346,8 +442,16 @@ interface UploadOneInput {
   probeEnabled: boolean;
 }
 
+/**
+ * Uploads one asset and any derivatives it has.
+ *
+ * The original goes first, always. A derivative names its parent by sha256, and
+ * the contract rejects one whose parent has no row with a 409 rather than
+ * orphaning the bytes — so the order here is not a preference, it is the only
+ * sequence that works.
+ */
 async function uploadOne(input: UploadOneInput): Promise<Outcome> {
-  const { candidate, proxy, client, gate, partSize, progress, probeEnabled } = input;
+  const { candidate, derived, client, gate, partSize, progress, probeEnabled } = input;
   const base: Omit<Outcome, 'status' | 'assetId'> = {
     path: candidate.path,
     filename: candidate.name,
@@ -355,9 +459,11 @@ async function uploadOne(input: UploadOneInput): Promise<Outcome> {
     bytes: candidate.bytes,
     kind: candidate.kind,
   };
-  // A photo is never mid-derivation: the edge transforms it at read time.
+  // A photo is never mid-derivation, and a video whose original is already
+  // browser-safe has nothing pending either.
   const deriveState: 'ready' | 'skipped' =
-    candidate.kind === 'photo' || proxy?.viewIsOriginal === true ? 'skipped' : 'ready';
+    candidate.kind === 'photo' || derived?.viewIsOriginal === true ? 'skipped' : 'ready';
+  const noView = derived?.undecodable === true;
 
   try {
     progress.start(candidate.path, candidate.name, candidate.bytes);
@@ -368,7 +474,11 @@ async function uploadOne(input: UploadOneInput): Promise<Outcome> {
       bytes: candidate.bytes,
       mime: candidate.mime,
       kind: candidate.kind,
+      role: 'orig',
     };
+    // Tells the worker no proxy is coming, so it can settle derive_state now
+    // rather than leaving the video 'pending' indefinitely. See NOTES.md §1.
+    if (derived?.viewIsOriginal === true) body.viewIsOriginal = true;
     if (probeEnabled) Object.assign(body, await probeFile(candidate.path, candidate.kind));
 
     const begin = await gate.run(() => client.beginUpload(body));
@@ -386,23 +496,6 @@ async function uploadOne(input: UploadOneInput): Promise<Outcome> {
       });
     }
 
-    // The proxy first: if the run dies between the two, an asset row that
-    // promises a viewKey pointing at bytes that were never written is worse
-    // than no asset row at all.
-    if (proxy !== null && proxy.proxyPath !== null) {
-      await uploadDerivative(client, gate, proxy.proxyPath, proxy.viewKey, 'video/mp4', partSize);
-    }
-    if (proxy !== null && proxy.posterPath !== null) {
-      await uploadDerivative(
-        client,
-        gate,
-        proxy.posterPath,
-        posterKeyFor(candidate.sha256),
-        'image/jpeg',
-        partSize,
-      );
-    }
-
     const parts = await sendParts({
       client,
       gate,
@@ -412,20 +505,36 @@ async function uploadOne(input: UploadOneInput): Promise<Outcome> {
       partSize,
       progress,
     });
-
-    await gate.run(() =>
-      client.completeUpload({
-        assetId: begin.assetId,
-        uploadId: begin.uploadId as string,
-        parts,
-        ...(proxy === null ? {} : { viewKey: proxy.viewKey }),
-      }),
-    );
+    await gate.run(() => client.completeUpload({ uploadId: begin.uploadId as string, parts }));
     await clearJournal(candidate.sha256);
+
+    // Only now that the parent row exists can its derivatives be accepted.
+    if (derived !== null && derived.viewPath !== null) {
+      await uploadDerivative({
+        client,
+        gate,
+        partSize,
+        path: derived.viewPath,
+        role: 'view',
+        ofAsset: candidate.sha256,
+        mime: derived.viewMime,
+      });
+    }
+    if (derived !== null && derived.posterPath !== null) {
+      await uploadDerivative({
+        client,
+        gate,
+        partSize,
+        path: derived.posterPath,
+        role: 'thumb',
+        ofAsset: candidate.sha256,
+        mime: 'image/jpeg',
+      });
+    }
     await clearTranscodeArtifacts(candidate.sha256);
 
     progress.finish(candidate.path, 'uploaded', candidate.name, formatBytes(candidate.bytes));
-    return { ...base, assetId: begin.assetId, status: 'uploaded', deriveState };
+    return { ...base, assetId: begin.assetId, status: 'uploaded', deriveState, noView };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     progress.finish(candidate.path, 'failed', candidate.name, message);
@@ -539,51 +648,57 @@ async function sendParts(input: SendPartsInput): Promise<UploadedPart[]> {
   return sortParts(done);
 }
 
+interface DerivativeInput {
+  client: ApiClient;
+  gate: Semaphore;
+  partSize: number;
+  path: string;
+  role: Exclude<UploadRole, 'orig'>;
+  /** The ORIGINAL's sha256. The derivative is named after its parent. */
+  ofAsset: string;
+  mime: string;
+}
+
 /**
- * Uploads a locally produced derivative — a video proxy or a poster frame.
+ * Uploads a locally produced derivative — a video proxy, a poster frame, or a
+ * bounded view for an oversize photo.
  *
- * NOTE: the contract gives `upload/complete` a `viewKey` but gives `begin` no
- * way to say "this blob is a derivative of asset X", so this runs the ordinary
- * content-addressed flow and hands the resulting key to the original's
- * `complete`. See NOTES.md; this function and `viewKeyFor` are the only two
- * places that assumption lives.
+ * The sha256 sent here is the derivative's own hash, used purely so the worker
+ * can verify the bytes arrived intact; it never appears in a key. The key comes
+ * from `role` and `ofAsset`, which is what makes it impossible for a proxy to
+ * become a standalone asset by accident.
  */
-async function uploadDerivative(
-  client: ApiClient,
-  gate: Semaphore,
-  path: string,
-  key: string,
-  mime: string,
-  partSize: number,
-): Promise<void> {
+async function uploadDerivative(input: DerivativeInput): Promise<void> {
+  const { client, gate, partSize, path, role, ofAsset, mime } = input;
   const { sha256, bytes } = await hashFile(path);
+
   const begin = await gate.run(() =>
-    client.beginUpload({ sha256, filename: key, bytes, mime, kind: 'video' }),
+    client.beginUpload({
+      sha256,
+      filename: `${ofAsset}.${role}`,
+      bytes,
+      mime,
+      role,
+      ofAsset,
+    }),
   );
   if (begin.exists === true) return;
   if (begin.uploadId === undefined) {
-    throw new CliError(`upload/begin returned no uploadId for the derivative ${key}.`, {
+    throw new CliError(`upload/begin returned no uploadId for the ${role} of ${ofAsset}.`, {
       code: EXIT.api,
     });
   }
+  const uploadId = begin.uploadId;
 
   const plan = planParts(bytes, partSize);
   const parts: UploadedPart[] = [];
   await mapPool(plan.parts, Math.max(1, Math.min(4, plan.parts.length)), async (part) => {
     const slice = Bun.file(path).slice(part.start, part.end);
-    const { etag } = await gate.run(() =>
-      client.uploadPart(begin.uploadId as string, part.partNumber, slice),
-    );
+    const { etag } = await gate.run(() => client.uploadPart(uploadId, part.partNumber, slice));
     parts.push({ partNumber: part.partNumber, etag });
   });
 
-  await gate.run(() =>
-    client.completeUpload({
-      assetId: begin.assetId,
-      uploadId: begin.uploadId as string,
-      parts: sortParts(parts),
-    }),
-  );
+  await gate.run(() => client.completeUpload({ uploadId, parts: sortParts(parts) }));
 }
 
 // ------------------------------------------------------------- reporting ----
@@ -593,14 +708,14 @@ interface SummaryInput {
   skipped: Outcome[];
   failed: Outcome[];
   duplicatesInBatch: number;
-  proxies: Map<string, Proxy>;
+  derived: Map<string, Derived>;
   tags: readonly string[];
   tagged: number;
   summary: { seconds: number; rate: number };
 }
 
 function reportSummary(input: SummaryInput): void {
-  const { uploaded, skipped, failed, duplicatesInBatch, proxies, tags, tagged, summary } = input;
+  const { uploaded, skipped, failed, duplicatesInBatch, derived, tags, tagged, summary } = input;
   const movedBytes = uploaded.reduce((sum, outcome) => sum + outcome.bytes, 0);
 
   out.line();
@@ -611,11 +726,20 @@ function reportSummary(input: SummaryInput): void {
       )}`,
     );
   }
-  const encoded = [...proxies.values()].filter((proxy) => !proxy.viewIsOriginal).length;
-  const reused = [...proxies.values()].filter((proxy) => proxy.viewIsOriginal).length;
+  const values = [...derived.values()];
+  const encoded = values.filter((d) => d.viewPath !== null && d.viewMime === 'video/mp4').length;
+  const reused = values.filter((d) => d.viewIsOriginal).length;
+  const photoViews = values.filter(
+    (d) => d.viewPath !== null && d.viewMime === 'image/jpeg',
+  ).length;
   if (encoded > 0) out.line(dim(`${encoded} video ${plural(encoded, 'proxy', 'proxies')} encoded`));
   if (reused > 0) {
     out.line(dim(`${reused} video(s) already browser-safe, uploaded without a proxy`));
+  }
+  if (photoViews > 0) {
+    out.line(
+      dim(`${photoViews} oversize ${plural(photoViews, 'photo')} given a bounded view rendition`),
+    );
   }
   if (skipped.length > 0) out.line(dim(`${skipped.length} already in pool, skipped`));
   if (duplicatesInBatch > 0) {
@@ -625,6 +749,20 @@ function reportSummary(input: SummaryInput): void {
   }
   if (tags.length > 0) {
     out.line(dim(`tagged ${tagged} ${plural(tagged, 'asset')} ${cyan(tags.join(' '))}`));
+  }
+
+  const withoutView = uploaded.filter((outcome) => outcome.noView === true);
+  if (withoutView.length > 0) {
+    out.line();
+    out.warn(
+      `${withoutView.length} oversize ${plural(withoutView.length, 'photo')} could not be decoded locally and ${
+        withoutView.length === 1 ? 'has' : 'have'
+      } no view rendition:`,
+    );
+    for (const outcome of withoutView) out.hint(`  ${outcome.filename}`);
+    out.hint('The originals uploaded and are downloadable; the share page shows a placeholder');
+    out.hint('rather than serving the full-resolution file. Install a decoder ffmpeg can use,');
+    out.hint('or convert them to JPEG/TIFF and re-upload.');
   }
 
   if (failed.length === 0) {

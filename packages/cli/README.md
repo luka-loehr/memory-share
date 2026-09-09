@@ -1,6 +1,7 @@
 # `ms` — the memory-share CLI
 
-Bun + TypeScript. Talks to the owner API in `docs/CONTRACT.md`.
+Bun + TypeScript. Talks to the owner API in `docs/CONTRACT.md`, and does the
+video transcoding locally with an ffmpeg it ships itself.
 
 ```
 bun install
@@ -13,13 +14,13 @@ bun link            # then `ms` is on PATH
 ```bash
 ms deploy      # provision R2 + D1 + the worker into your own Cloudflare account
 ms login       # or, against an instance that already exists
-ms status
+ms status      # pool, memories, and which ffmpeg it found
 ```
 
 `ms deploy` is idempotent: it looks resources up before creating them, only
 generates secrets that are absent, and writes the D1 id into `wrangler.jsonc`
 textually so your comments survive. It prints a checklist of what it created
-versus reused. Re-run it as often as you like.
+versus reused.
 
 ## Everyday use
 
@@ -28,12 +29,92 @@ ms upload ~/Pictures/croatia --tag croatia --tag with-mom
 ms ls --tag croatia
 ms tag a1b2c3d4 --add favourites
 ms memory create "Croatia 2019" --tag croatia --expires 30d
-ms memory ls
+ms memory set croatia-2019 --expires 90d
 ms download croatia-2019 ./backup
 ```
 
-Interrupt any upload or download and re-run the same command — finished files
-are skipped and partial ones resume.
+Interrupt any upload, encode or download and re-run the same command — finished
+files are skipped, partial transfers resume, and a proxy that finished encoding
+before the interruption is reused rather than encoded again.
+
+## Video
+
+Photos are never touched: the edge transforms them at read time, so `ms upload`
+sends the original and nothing else.
+
+Video is transcoded **locally**, because the machine holding the footage is the
+one that should pay for it:
+
+- A clip that is **already H.264 in a real `.mp4` within 1080p** is uploaded
+  as-is and marked `view_is_original`. It is not re-encoded.
+- Anything else — HEVC, 4K, `.mov`, or an MP4 whose `moov` atom trails the media
+  — gets a `view/<sha>.mp4` proxy: H.264, scaled to fit 1080p, AAC audio, and
+  `-movflags +faststart` so a browser can play and seek without fetching the
+  whole file first.
+- Every video also gets a poster frame, taken ~1.5 s in rather than at frame 0,
+  which on phone footage is usually a motion-blurred mid-lift.
+
+Hardware encoding is used when the ffmpeg build actually reports it —
+`h264_videotoolbox` on macOS, `h264_nvenc` on Linux with NVIDIA — falling back
+to `libx264`. `ms status` shows which was chosen.
+
+Encodes run `cores - 2` at a time by default (`--jobs` to change), so the
+machine stays usable. **One video failing to encode never aborts the batch**:
+it is recorded, the rest proceed, and the summary prints a command that retries
+just the failures.
+
+`ms upload --dry-run` prints what each video would do and why, without encoding
+or uploading anything.
+
+## Where ffmpeg comes from
+
+The CLI is the only thing you install. `ffmpeg` and `ffprobe` ship as **optional
+dependencies**, one package per platform:
+
+```
+@memory-share/ffmpeg-darwin-arm64   @memory-share/ffmpeg-linux-x64
+@memory-share/ffmpeg-darwin-x64     @memory-share/ffmpeg-linux-arm64
+@memory-share/ffmpeg-win32-x64
+```
+
+Your package manager fetches only the one matching your platform and installs it
+into `node_modules`, **inside the package directory** — so removing the CLI
+removes the binaries with it. Nothing is ever downloaded into `~/.cache`,
+`~/.local` or `/tmp`, because those would survive an uninstall.
+
+If no prebuilt binary exists for your platform, the CLI falls back to a system
+ffmpeg on `PATH`. If that is missing too it stops with an error naming your
+platform — it never silently skips transcoding. `MS_FFMPEG_PATH` and
+`MS_FFPROBE_PATH` override everything.
+
+`exiftool` is *not* bundled (it is a Perl distribution, not a static binary). It
+is used if present, to read photo EXIF dates; without it `taken_at` falls back
+to file mtime.
+
+## Uninstalling
+
+Two things exist on your machine, and they come off separately.
+
+```bash
+ms uninstall                       # local credentials and caches
+bun remove -g @memory-share/cli    # the CLI and its bundled ffmpeg
+# or: npm rm -g @memory-share/cli
+```
+
+**A plain package-manager uninstall leaves one thing behind:**
+`~/.config/memory-share` — your worker URL, admin token, upload journals, hash
+cache and any cached video proxies. A package manager will not remove a
+directory it did not create. `ms uninstall` removes exactly that directory, and
+lists what it is deleting first. Run it *before* removing the package, or delete
+the directory by hand afterwards:
+
+```bash
+rm -rf ~/.config/memory-share
+```
+
+Neither command touches Cloudflare. Your assets, memories and deployed worker
+are untouched by both; to remove those, delete the R2 bucket, D1 database and
+Worker from the Cloudflare dashboard.
 
 ## Conventions
 
@@ -41,33 +122,42 @@ are skipped and partial ones resume.
   prose moves to stderr, so `ms ls --json | jq` always works.
 - Every destructive command confirms, and refuses outright without a terminal
   unless `--yes` is passed.
-- Asset ids may be abbreviated to any unique prefix. Ambiguity is an error, never
-  a guess.
+- Asset ids may be abbreviated to any unique prefix. Ambiguity is an error,
+  never a guess.
 - Exit codes: `0` ok, `2` usage, `3` config, `4` network, `5` API, `6` checksum
-  mismatch, `7` external tool (wrangler), `130` cancelled.
-- `NO_COLOR`, `MS_WORKER_URL`, `MS_ADMIN_TOKEN`, `MS_CONFIG_PATH`, `MS_DEBUG`.
+  mismatch, `7` external tool (wrangler or ffmpeg), `130` cancelled.
+- `NO_COLOR`, `MS_WORKER_URL`, `MS_ADMIN_TOKEN`, `MS_CONFIG_PATH`,
+  `MS_FFMPEG_PATH`, `MS_FFPROBE_PATH`, `MS_DEBUG`.
 
 Credentials live in `~/.config/memory-share/config.json` at mode 0600. Secret
 values are never echoed, logged, or printed back — confirmations show a
-fingerprint (`ms_l****…mnop`) instead.
+fingerprint (`ms_l****…mnop`) instead. `MS_CONFIG_PATH` relocates the whole
+directory, not just the file.
 
 ## Layout
 
 ```
 src/cli/        argument parsing and help rendering
-src/core/       config, API client, hashing, resume, probing, wrangler
+src/core/       config, API client, hashing, resume, ffmpeg resolution,
+                transcoding, probing, wrangler
 src/ui/         colour, formatting, tables, the progress renderer, prompts
 src/commands/   one file per command
+scripts/        vendor-ffmpeg.ts — populates the platform packages at release
 test/           bun test, over the pure logic
 ```
 
 ## Development
 
 ```bash
-bun test          # 92 tests
+bun test          # 144 tests
 bun run typecheck # tsc --noEmit, strict
 bun run lint      # biome
 bun run fix       # biome --write
+
+# populate a platform package's bin/ (release step; ~50 MB per binary)
+bun run scripts/vendor-ffmpeg.ts --platform darwin-arm64
+bun run scripts/vendor-ffmpeg.ts --all
 ```
 
-See `NOTES.md` for the places where the contract and this CLI disagree.
+See `NOTES.md` for the places where the contract and this CLI disagree, and for
+why the ffmpeg bundling is built the way it is.

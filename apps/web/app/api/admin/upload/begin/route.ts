@@ -1,5 +1,6 @@
+import { getAsset } from '@/lib/admin/assets';
 import { requireAdmin } from '@/lib/admin/auth';
-import { int, num, readJson, str } from '@/lib/admin/parse';
+import { bool, int, num, readJson, str } from '@/lib/admin/parse';
 import {
   keyFor,
   mintUploadId,
@@ -86,13 +87,20 @@ export async function POST(request: Request) {
   // -------------------------------------------------------------- original --
   // Content addressed: the same photograph from a different folder, a different
   // phone, or a re-run of an interrupted import is a no-op, not a duplicate.
-  const existing = await env.DB.prepare(`SELECT id FROM assets WHERE id = ?1`)
-    .bind(sha256)
-    .first<{ id: string }>();
-  if (existing) return json({ assetId: sha256, exists: true });
+  //
+  // The row travels back with `exists:true` so the CLI can compare its
+  // `view_key`/`thumb_key` against what it was about to encode and skip the
+  // work entirely. The skip decision belongs on the client, which is where the
+  // encode cost is actually paid and which is the only side that knows what its
+  // ffmpeg would produce; the server stays ignorant of encoder versions.
+  const existing = await getAsset(env, sha256);
+  if (existing) return json({ assetId: sha256, exists: true, asset: existing });
 
   const kindHint = body.kind === 'photo' || body.kind === 'video' ? body.kind : null;
   const kind = kindHint ?? (mime.startsWith('video/') ? 'video' : 'photo');
+
+  // Photos store no derivatives at all, so the flag is meaningless for them.
+  const viewIsOriginal = kind === 'video' && bool(body.viewIsOriginal) === true;
 
   const key = keyFor('orig', sha256);
   const multipart = await env.MEDIA.createMultipartUpload(key, {
@@ -113,6 +121,7 @@ export async function POST(request: Request) {
       height: int(body.height, 0) ?? 0,
       duration: num(body.duration),
       takenAt: int(body.takenAt, 0),
+      viewIsOriginal,
     },
   };
 

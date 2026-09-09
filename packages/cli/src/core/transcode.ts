@@ -22,6 +22,28 @@ export const MAX_VIEW_HEIGHT = 1080;
 /** Frame 0 of phone video is usually motion-blurred mid-lift. */
 export const POSTER_OFFSET_SECONDS = 1.5;
 
+/**
+ * The Cloudflare Images binding refuses inputs above 20 MB, so a photo larger
+ * than this cannot be transformed at read time and the share page would have
+ * nothing to show for it.
+ *
+ * Deliberately the decimal 20 MB rather than 20 MiB. Erring small means a file
+ * in the 20.0–20.97 MB band gets a view rendition it might not have needed,
+ * which costs a few hundred kilobytes. Erring large would mean a file the edge
+ * actually rejects has no view at all — and the server's only safe response to
+ * that is 415, because serving the original instead would hand a full-quality
+ * download to a memory whose whole point is `allow_download = 0`.
+ */
+export const IMAGES_MAX_BYTES = 20_000_000;
+
+/** The longest edge of a view rendition, matching what the edge would produce. */
+export const MAX_PHOTO_VIEW_EDGE = 2560;
+
+/** Only oversize photos get a stored view; the common case stays derivative-free. */
+export function photoNeedsView(bytes: number): boolean {
+  return bytes > IMAGES_MAX_BYTES;
+}
+
 export interface VideoStreamInfo {
   codec: string;
   width: number;
@@ -152,6 +174,37 @@ export function bitrateFor(width: number, height: number): string {
   const pixels = width * height;
   const mbps = Math.min(8, Math.max(1.5, (pixels / (1920 * 1080)) * 6));
   return `${mbps.toFixed(1)}M`;
+}
+
+/**
+ * A bounded JPEG for a photo too large for the Images binding.
+ *
+ * Fits inside 2560 on the longest edge without ever upscaling, applies EXIF
+ * orientation, and strips metadata — a view rendition served to a recipient
+ * should not carry the GPS coordinates of someone's house.
+ */
+export function photoViewArgs(input: string, output: string): string[] {
+  return [
+    '-hide_banner',
+    '-nostdin',
+    '-loglevel',
+    'error',
+    '-y',
+    '-i',
+    input,
+    '-map_metadata',
+    '-1',
+    '-vf',
+    // min() on both axes means a smaller source is left alone rather than blown up.
+    `scale=w='min(${MAX_PHOTO_VIEW_EDGE},iw)':h='min(${MAX_PHOTO_VIEW_EDGE},ih)':force_original_aspect_ratio=decrease:flags=lanczos`,
+    '-frames:v',
+    '1',
+    '-q:v',
+    '3',
+    '-f',
+    'image2',
+    output,
+  ];
 }
 
 /** A single JPEG frame, used as the video's thumbnail. */
@@ -320,6 +373,46 @@ export function posterPath(sha256: string): string {
   return join(transcodeDir(), `${sha256}.poster.jpg`);
 }
 
+export function photoViewPath(sha256: string): string {
+  return join(transcodeDir(), `${sha256}.view.jpg`);
+}
+
+/**
+ * Renders the bounded view for an oversize photo, or null if ffmpeg cannot
+ * decode it — ProRAW DNG and other exotic formats are a real possibility.
+ *
+ * A null is not a failure of the upload. The original still goes up; the asset
+ * simply has no stored view and the edge answers 415, which shows a placeholder.
+ * Withholding beats leaking.
+ */
+export async function renderPhotoView(input: string, sha256: string): Promise<string | null> {
+  const ffmpeg = await requireTool('ffmpeg');
+  const output = photoViewPath(sha256);
+  await mkdir(transcodeDir(), { recursive: true, mode: 0o700 });
+
+  const existing = await stat(output).catch(() => null);
+  if (existing !== null && existing.size > 0) return output;
+
+  const partial = `${output}.partial`;
+  await rm(partial, { force: true });
+  const proc = Bun.spawn([ffmpeg.path, ...photoViewArgs(input, partial)], {
+    stdout: 'ignore',
+    stderr: 'ignore',
+  });
+  if ((await proc.exited) !== 0) {
+    await rm(partial, { force: true });
+    return null;
+  }
+  const info = await stat(partial).catch(() => null);
+  if (info === null || info.size === 0) {
+    await rm(partial, { force: true });
+    return null;
+  }
+  await Bun.write(output, Bun.file(partial));
+  await rm(partial, { force: true });
+  return output;
+}
+
 /**
  * Encodes a proxy, resuming by reuse: a completed proxy from an earlier
  * interrupted run is kept and returned rather than re-encoded, since encoding
@@ -418,20 +511,8 @@ export async function extractPoster(
 
 /** Drops the cached proxy and poster once both have been uploaded. */
 export async function clearTranscodeArtifacts(sha256: string): Promise<void> {
-  await rm(proxyPath(sha256), { force: true });
-  await rm(posterPath(sha256), { force: true });
-  await rm(`${proxyPath(sha256)}.partial`, { force: true });
-}
-
-/**
- * The R2 keys a video's derivatives live at, per the contract's R2 layout.
- * Both are keyed on the *original's* sha256, not the derivative's — that is
- * what makes them addressable from the asset row.
- */
-export function viewKeyFor(originalSha256: string): string {
-  return `view/${originalSha256}.mp4`;
-}
-
-export function posterKeyFor(originalSha256: string): string {
-  return `thumb/${originalSha256}.jpg`;
+  for (const path of [proxyPath(sha256), posterPath(sha256), photoViewPath(sha256)]) {
+    await rm(path, { force: true });
+    await rm(`${path}.partial`, { force: true });
+  }
 }

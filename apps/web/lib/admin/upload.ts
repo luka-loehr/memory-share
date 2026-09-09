@@ -43,6 +43,13 @@ export type UploadSession = {
     height: number;
     duration: number | null;
     takenAt: number | null;
+    /**
+     * Video only: the original is already browser-safe, so it IS the view and
+     * no proxy will ever be uploaded. Declared here at `begin` because it is
+     * the one fact no derivative can imply — in this case there is no
+     * derivative to imply it.
+     */
+    viewIsOriginal: boolean;
   };
 };
 
@@ -151,7 +158,14 @@ export async function listReceipts(env: Env, token: string): Promise<PartReceipt
 
   // R2 pages at 1000; a multipart upload may hold up to 10,000 parts.
   do {
-    const page = await env.MEDIA.list({ prefix, cursor, limit: 1000 });
+    // `include` is not optional here: R2 omits custom metadata from a listing
+    // unless it is asked for, and the etag is the entire point of a receipt.
+    const page = await env.MEDIA.list({
+      prefix,
+      cursor,
+      limit: 1000,
+      include: ['customMetadata'],
+    });
     for (const object of page.objects) {
       const part = Number(object.key.slice(prefix.length));
       const etag = object.customMetadata?.etag;
