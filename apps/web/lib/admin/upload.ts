@@ -107,11 +107,27 @@ export const SHA256 = /^[0-9a-f]{64}$/;
  * what makes `view/` and `thumb/` reachable from an asset row without storing a
  * second identifier, and it is why a derivative's own sha256 appears nowhere in
  * a key.
+ *
+ * The extension follows the DECLARED MIME, not the role. A `view` is no longer
+ * always a video proxy: a photo above the Images binding's 20 MB input cap gets
+ * a bounded JPEG view uploaded the same way, and naming that `.mp4` would hand
+ * a browser an image labelled as video.
  */
-export function keyFor(role: UploadRole, sha256: string, ofAsset?: string): string {
+export function keyFor(role: UploadRole, sha256: string, ofAsset?: string, mime?: string): string {
   if (role === 'orig') return `orig/${sha256}`;
   const parent = ofAsset ?? '';
-  return role === 'view' ? `view/${parent}.mp4` : `thumb/${parent}.jpg`;
+  if (role === 'thumb') return `thumb/${parent}.jpg`;
+  return `view/${parent}.${extensionFor(mime)}`;
+}
+
+/** Only the shapes a `view` can legitimately take; anything else is refused. */
+const VIEW_TYPES: Record<string, string> = {
+  'video/mp4': 'mp4',
+  'image/jpeg': 'jpg',
+};
+
+export function extensionFor(mime?: string): string | undefined {
+  return mime === undefined ? undefined : VIEW_TYPES[mime];
 }
 
 /** The column a completed derivative writes into. */

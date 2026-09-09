@@ -46,6 +46,8 @@ export function photoNeedsView(bytes: number): boolean {
 
 export interface VideoStreamInfo {
   codec: string;
+  /** Needed to decide whether an audio track can be copied into MP4 as-is. */
+  audioCodec?: string | null;
   width: number;
   height: number;
   duration: number;
@@ -58,7 +60,7 @@ export interface VideoStreamInfo {
 }
 
 export interface ViewDecision {
-  action: 'reuse-original' | 'encode';
+  action: 'reuse-original' | 'remux' | 'encode';
   reason: string;
 }
 
@@ -72,28 +74,39 @@ export interface ViewDecision {
  */
 export function decideView(info: VideoStreamInfo): ViewDecision {
   const codec = info.codec.toLowerCase();
-  const container = info.container.toLowerCase();
 
+  // Only a re-encode can change the codec or the frame size.
   if (codec !== 'h264') {
     return { action: 'encode', reason: `${info.codec} is not H.264` };
-  }
-  // ffprobe reports the identical `mov,mp4,m4a,3gp,3g2,mj2` family for a .mov
-  // and a .mp4, so format_name alone cannot tell them apart. The extension is
-  // the only cheap signal that distinguishes them, and a QuickTime container is
-  // not something to hand a browser and hope.
-  if (!container.split(',').includes('mp4')) {
-    return { action: 'encode', reason: `${info.container} is not an MP4 container` };
-  }
-  if (info.extension !== undefined && !['mp4', 'm4v'].includes(info.extension)) {
-    return { action: 'encode', reason: `.${info.extension} is not an MP4 container` };
   }
   if (info.width > MAX_VIEW_WIDTH || info.height > MAX_VIEW_HEIGHT) {
     return { action: 'encode', reason: `${info.width}×${info.height} is above 1080p` };
   }
-  if (info.faststart === false) {
-    return { action: 'encode', reason: 'the moov atom is at the end of the file' };
+
+  // ffprobe reports the identical `mov,mp4,m4a,3gp,3g2,mj2` family for a .mov
+  // and a .mp4, so format_name alone cannot tell them apart; the extension is
+  // the only cheap signal that distinguishes a QuickTime wrapper from a real
+  // MP4, and a .mov is not something to hand a browser and hope.
+  const container = info.container.toLowerCase();
+  const isMp4 =
+    container.split(',').includes('mp4') &&
+    (info.extension === undefined || ['mp4', 'm4v'].includes(info.extension));
+
+  if (isMp4 && info.faststart !== false) {
+    return { action: 'reuse-original', reason: 'already H.264 MP4 within 1080p' };
   }
-  return { action: 'reuse-original', reason: 'already H.264 MP4 within 1080p' };
+
+  // The picture is already exactly what the viewer wants — it is only in the
+  // wrong wrapper, or has its moov atom in the wrong place. Both are fixed by
+  // a stream copy, which is near-instant and lossless. Re-encoding here would
+  // burn minutes per file and *lose* quality to produce the same picture.
+  if (!isMp4) {
+    return {
+      action: 'remux',
+      reason: `H.264 within 1080p in ${info.extension ? `.${info.extension}` : 'a non-MP4 container'} — remux, no re-encode`,
+    };
+  }
+  return { action: 'remux', reason: 'moov atom at the end — remux to move it, no re-encode' };
 }
 
 /**
@@ -158,6 +171,51 @@ export function encodeArgs(options: EncodeOptions): string[] {
     '128k',
     '-ac',
     '2',
+    '-movflags',
+    '+faststart',
+    '-f',
+    'mp4',
+    '-progress',
+    'pipe:1',
+    '-nostats',
+    options.output,
+  ];
+}
+
+/**
+ * A container change with no transcode: the H.264 picture is copied through
+ * untouched and only the wrapper is rebuilt, with the moov atom up front.
+ *
+ * Audio is copied when it is already AAC and re-encoded otherwise — PCM is
+ * common in `.mov` files off a camera and, while MP4 can technically carry it,
+ * no browser will play it. Encoding one audio track is trivial next to a video
+ * transcode, so this stays effectively free.
+ */
+export function remuxArgs(options: {
+  input: string;
+  output: string;
+  audioCodec?: string | null;
+}): string[] {
+  const audio =
+    (options.audioCodec ?? '').toLowerCase() === 'aac'
+      ? ['-c:a', 'copy']
+      : ['-c:a', 'aac', '-b:a', '128k', '-ac', '2'];
+
+  return [
+    '-hide_banner',
+    '-nostdin',
+    '-loglevel',
+    'error',
+    '-y',
+    '-i',
+    options.input,
+    '-map',
+    '0:v:0',
+    '-map',
+    '0:a:0?',
+    '-c:v',
+    'copy',
+    ...audio,
     '-movflags',
     '+faststart',
     '-f',
@@ -291,6 +349,8 @@ export async function probeVideo(path: string): Promise<VideoStreamInfo | null> 
   return {
     extension: path.toLowerCase().split('.').pop(),
     codec: video.codec_name ?? 'unknown',
+    audioCodec:
+      (parsed.streams ?? []).find((stream) => stream.codec_type === 'audio')?.codec_name ?? null,
     width: video.width ?? 0,
     height: video.height ?? 0,
     duration: Number(parsed.format?.duration ?? video.duration ?? 0) || 0,
@@ -336,10 +396,12 @@ export async function hasFaststart(path: string): Promise<boolean | undefined> {
 export interface EncodeResult {
   path: string;
   bytes: number;
-  encoder: H264Encoder;
+  /** null when the picture was copied through rather than encoded. */
+  encoder: H264Encoder | null;
   width: number;
   height: number;
   seconds: number;
+  remuxed: boolean;
 }
 
 let encoderChoice: H264Encoder | null = null;
@@ -441,6 +503,7 @@ export async function encodeProxy(
       width,
       height,
       seconds: 0,
+      remuxed: false,
     };
   }
 
@@ -482,7 +545,77 @@ export async function encodeProxy(
   await Bun.write(output, Bun.file(partial));
   await rm(partial, { force: true });
   const bytes = (await stat(output)).size;
-  return { path: output, bytes, encoder, width, height, seconds: (Date.now() - started) / 1000 };
+  return {
+    path: output,
+    bytes,
+    encoder,
+    width,
+    height,
+    seconds: (Date.now() - started) / 1000,
+    remuxed: false,
+  };
+}
+
+/**
+ * Rebuilds the container around an untouched H.264 stream.
+ *
+ * Returns null rather than throwing when the copy is not possible — a bitstream
+ * in the wrong format for MP4 is the realistic case — so the caller can fall
+ * back to a real encode instead of failing the file. That fallback is what lets
+ * this be attempted optimistically.
+ */
+export async function remuxProxy(
+  input: string,
+  sha256: string,
+  info: VideoStreamInfo,
+): Promise<EncodeResult | null> {
+  const output = proxyPath(sha256);
+  await mkdir(transcodeDir(), { recursive: true, mode: 0o700 });
+
+  const existing = await stat(output).catch(() => null);
+  if (existing !== null && existing.size > 0) {
+    return {
+      path: output,
+      bytes: existing.size,
+      encoder: null,
+      width: info.width,
+      height: info.height,
+      seconds: 0,
+      remuxed: true,
+    };
+  }
+
+  const partial = `${output}.partial`;
+  await rm(partial, { force: true });
+  const started = Date.now();
+  const ffmpeg = await requireTool('ffmpeg');
+
+  const proc = Bun.spawn(
+    [ffmpeg.path, ...remuxArgs({ input, output: partial, audioCodec: info.audioCodec })],
+    { stdout: 'ignore', stderr: 'ignore' },
+  );
+  if ((await proc.exited) !== 0) {
+    await rm(partial, { force: true });
+    return null;
+  }
+
+  const info2 = await stat(partial).catch(() => null);
+  if (info2 === null || info2.size === 0) {
+    await rm(partial, { force: true });
+    return null;
+  }
+  await Bun.write(output, Bun.file(partial));
+  await rm(partial, { force: true });
+
+  return {
+    path: output,
+    bytes: info2.size,
+    encoder: null,
+    width: info.width,
+    height: info.height,
+    seconds: (Date.now() - started) / 1000,
+    remuxed: true,
+  };
 }
 
 /** A poster frame, or null — a video with no readable frame is not fatal. */
@@ -534,4 +667,78 @@ export function deriveStateFor(input: {
   if (input.kind === 'photo') return 'skipped';
   if (input.viewIsOriginal) return 'skipped';
   return input.hasProxy ? 'ready' : 'pending';
+}
+
+/**
+ * What still has to be produced and uploaded for one file, given whatever the
+ * pool already holds for it.
+ *
+ * A derivative cannot short-circuit server-side: its hash is never persisted,
+ * so `begin` always reports `exists:false` for one, and a naive re-run would
+ * re-encode and re-send every proxy in the library. The skip therefore has to
+ * be decided here, on the side that would actually pay the encode cost — and
+ * decided from the parent row's derivative keys, which is exactly what
+ * `begin` hands back with `exists:true`.
+ *
+ * The same comparison repairs a partial import: an asset uploaded earlier with
+ * `--no-transcode` has a row but no `view_key`, so a later run produces just
+ * the proxy without re-uploading the original.
+ */
+export interface WorkPlan {
+  needsOriginal: boolean;
+  needsView: boolean;
+  needsThumb: boolean;
+}
+
+export function planWork(input: {
+  kind: 'photo' | 'video';
+  bytes: number;
+  /** The existing row, or null when the asset is not in the pool at all. */
+  existing: {
+    view_key?: string | null;
+    thumb_key?: string | null;
+    view_is_original?: number;
+  } | null;
+  /** Videos only, and only once probed: whether the original is browser-safe. */
+  viewIsOriginal?: boolean;
+  /** False when --no-transcode suppresses video work. */
+  transcode: boolean;
+}): WorkPlan {
+  const existing = input.existing;
+  const has = (value: string | null | undefined): boolean =>
+    typeof value === 'string' && value !== '';
+
+  if (input.kind === 'photo') {
+    const wantsView = photoNeedsView(input.bytes);
+    return {
+      needsOriginal: existing === null,
+      needsView: wantsView && !has(existing?.view_key),
+      needsThumb: false,
+    };
+  }
+
+  if (!input.transcode) {
+    return { needsOriginal: existing === null, needsView: false, needsThumb: false };
+  }
+
+  // A browser-safe original needs no proxy; the flag rides on the original's
+  // `begin`, so there is nothing to upload and nothing to repair afterwards.
+  if (input.viewIsOriginal === true) {
+    return {
+      needsOriginal: existing === null,
+      needsView: false,
+      needsThumb: !has(existing?.thumb_key),
+    };
+  }
+
+  return {
+    needsOriginal: existing === null,
+    needsView: !has(existing?.view_key),
+    needsThumb: !has(existing?.thumb_key),
+  };
+}
+
+/** Nothing to do at all — neither bytes to send nor frames to encode. */
+export function planIsEmpty(plan: WorkPlan): boolean {
+  return !plan.needsOriginal && !plan.needsView && !plan.needsThumb;
 }

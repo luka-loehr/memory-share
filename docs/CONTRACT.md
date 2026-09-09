@@ -16,7 +16,9 @@ is wrong and should be fixed — do not silently diverge.
 
 ```
 orig/<sha256>            byte-identical original. never rewritten.
-view/<sha256>.mp4        ~1080p H.264 + faststart. VIDEO ONLY.
+view/<sha256>.mp4        ~1080p H.264 + faststart, for a video.
+view/<sha256>.jpg        bounded rendition of a photo above the 20 MB
+                         Images-binding input cap.
 thumb/<sha256>.jpg       poster frame. VIDEO ONLY.
 ```
 
@@ -117,7 +119,11 @@ or `role:'thumb'` means a derivative, and then `ofAsset` MUST carry the
 ORIGINAL's sha256.
 
 A derivative:
-- is written straight to `view/<ofAsset>.mp4` or `thumb/<ofAsset>.jpg`,
+- is written to `thumb/<ofAsset>.jpg`, or to `view/<ofAsset>.<ext>` where the
+  extension follows the DECLARED MIME, never the role — a `view` is not always
+  a video, and naming a photo's rendition `.mp4` would hand a browser an image
+  labelled as video. `view` accepts `video/mp4` and `image/jpeg`; any other
+  mime is refused 400 rather than guessed,
 - creates **no** `assets` row — it is not an asset and must never appear in
   `ms ls`,
 - on `complete`, updates its parent row's `view_key` / `thumb_key` and sets
@@ -134,10 +140,11 @@ completion writes it. `complete` is exactly `{uploadId, parts[]}`. There is one
 way for bytes to reach a derivative key, and no path by which a proxy can
 accidentally become a standalone asset.
 
-**Only `role:'view'` moves `derive_state` to `'ready'`.** A poster landing
-first sets `thumb_key` and nothing else — otherwise an asset would read as
-ready with `view_key` still NULL, which is precisely the state the field exists
-to distinguish.
+**Only `role:'view'` on a VIDEO parent moves `derive_state` to `'ready'`.** A
+poster landing first sets `thumb_key` and nothing else — otherwise an asset
+would read as ready with `view_key` still NULL, which is precisely the state
+the field exists to distinguish. An oversize photo's view sets `view_key` and
+leaves the row `'skipped'`: a photo is never observably mid-derivation.
 
 **Derivatives never short-circuit**, because a derivative's own hash is not
 persisted and the server therefore cannot tell a current encode from a stale

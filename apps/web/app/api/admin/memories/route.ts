@@ -2,6 +2,7 @@ import { requireAdmin } from '@/lib/admin/auth';
 import { findAdminMemory, listMemories, uniqueSlug, unknownAssets } from '@/lib/admin/memories';
 import { bool, idList, int, readJson, str } from '@/lib/admin/parse';
 import { generatePassword, hashPassword } from '@/lib/admin/secrets';
+import { batchInChunks } from '@/lib/admin/d1';
 import { json } from '@/lib/http';
 
 export const dynamic = 'force-dynamic';
@@ -83,7 +84,7 @@ export async function POST(request: Request) {
       ).bind(id, assetId, index),
     ),
   ];
-  await env.DB.batch(statements);
+  await batchInChunks(env.DB, statements);
 
   const memory = await findAdminMemory(env, slug);
   if (!memory) return json({ error: 'create_failed' }, { status: 500 });

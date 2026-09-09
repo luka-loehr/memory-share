@@ -37,25 +37,39 @@ export type Row = Omit<AdminAsset, 'tags'>;
  * Tags in one extra query rather than a GROUP_CONCAT join, so a page of assets
  * costs two statements regardless of how many tags each carries.
  */
+/**
+ * D1 refuses a statement with more than 100 bound parameters, and this binds
+ * one per asset id. A page of 200 (the route's default) therefore failed with a
+ * bare 500 as soon as a real library grew past 100 assets — invisible against
+ * small fixtures, fatal on the first genuine import. Chunked well under the
+ * limit instead.
+ */
+const D1_MAX_BOUND_PARAMS = 90;
+
 export async function withTags(env: Env, rows: Row[]): Promise<AdminAsset[]> {
   if (rows.length === 0) return [];
-  const ids = rows.map((row) => row.id);
-  const placeholders = ids.map((_, i) => `?${i + 1}`).join(', ');
-  const { results } = await env.DB.prepare(
-    `SELECT at.asset_id, t.name
-       FROM asset_tags at JOIN tags t ON t.id = at.tag_id
-      WHERE at.asset_id IN (${placeholders})
-      ORDER BY t.name ASC`,
-  )
-    .bind(...ids)
-    .all<{ asset_id: string; name: string }>();
 
   const byAsset = new Map<string, string[]>();
-  for (const row of results ?? []) {
-    const list = byAsset.get(row.asset_id);
-    if (list) list.push(row.name);
-    else byAsset.set(row.asset_id, [row.name]);
+
+  for (let start = 0; start < rows.length; start += D1_MAX_BOUND_PARAMS) {
+    const ids = rows.slice(start, start + D1_MAX_BOUND_PARAMS).map((row) => row.id);
+    const placeholders = ids.map((_, i) => `?${i + 1}`).join(', ');
+    const { results } = await env.DB.prepare(
+      `SELECT at.asset_id, t.name
+         FROM asset_tags at JOIN tags t ON t.id = at.tag_id
+        WHERE at.asset_id IN (${placeholders})
+        ORDER BY t.name ASC`,
+    )
+      .bind(...ids)
+      .all<{ asset_id: string; name: string }>();
+
+    for (const row of results ?? []) {
+      const list = byAsset.get(row.asset_id);
+      if (list) list.push(row.name);
+      else byAsset.set(row.asset_id, [row.name]);
+    }
   }
+
   return rows.map((row) => ({ ...row, tags: byAsset.get(row.id) ?? [] }));
 }
 
@@ -169,11 +183,18 @@ export async function applyTags(
   add: string[],
   remove: string[],
 ): Promise<number> {
-  const placeholders = assetIds.map((_, i) => `?${i + 1}`).join(', ');
-  const { results } = await env.DB.prepare(`SELECT id FROM assets WHERE id IN (${placeholders})`)
-    .bind(...assetIds)
-    .all<{ id: string }>();
-  const known = (results ?? []).map((row) => row.id);
+  // Same D1 bound-parameter ceiling as withTags: one `?` per id, so tagging a
+  // real import in one call (the CLI tags the whole batch at the end of a run)
+  // failed with a bare 500 the moment it exceeded 100 assets.
+  const known: string[] = [];
+  for (let start = 0; start < assetIds.length; start += D1_MAX_BOUND_PARAMS) {
+    const slice = assetIds.slice(start, start + D1_MAX_BOUND_PARAMS);
+    const placeholders = slice.map((_, i) => `?${i + 1}`).join(', ');
+    const { results } = await env.DB.prepare(`SELECT id FROM assets WHERE id IN (${placeholders})`)
+      .bind(...slice)
+      .all<{ id: string }>();
+    for (const row of results ?? []) known.push(row.id);
+  }
   if (known.length === 0) return 0;
 
   const now = Math.floor(Date.now() / 1000);
@@ -206,6 +227,12 @@ export async function applyTags(
     }
   }
 
-  if (statements.length > 0) await env.DB.batch(statements);
+  // A batch is one statement per (asset, tag) pair, so a few hundred assets
+  // produces well over a thousand. Send them in bounded groups rather than
+  // discovering D1's batch ceiling on the user's first real import.
+  const BATCH = 100;
+  for (let start = 0; start < statements.length; start += BATCH) {
+    await env.DB.batch(statements.slice(start, start + BATCH));
+  }
   return known.length;
 }

@@ -70,17 +70,26 @@ export interface BeginBody {
   kind?: AssetKind;
   /**
    * Set for a video whose original is already browser-safe, so no view
-   * derivative follows. NOT in the contract — see NOTES.md. Without it the
-   * worker cannot distinguish "no proxy is coming" from "the proxy has not
-   * arrived yet", and such a video stays `derive_state='pending'` forever.
-   * Inert for a worker that ignores it.
+   * derivative follows. Without it the server cannot tell "no proxy is coming"
+   * from "the proxy has not arrived yet", and such a video would sit at
+   * `derive_state='pending'` forever. The server sets view_key = orig_key,
+   * view_is_original = 1 and derive_state = 'skipped' in the same write.
    */
   viewIsOriginal?: boolean;
 }
 
 export interface BeginResponse {
+  /** For a derivative this is the PARENT's id — a derivative has none of its own. */
   assetId: string;
+  /** Always false for a derivative: a proxy's hash is never persisted. */
   exists: boolean;
+  /**
+   * The existing row, returned with `exists:true` for an original. The CLI
+   * compares its derivative keys against what it was about to produce and
+   * skips the encode entirely — the skip decision belongs where the encode
+   * cost is paid.
+   */
+  asset?: Asset;
   /**
    * Always present for a new asset: the contract states uploads are multipart
    * whatever the size, so there is no presigned single-shot URL to fall back to.

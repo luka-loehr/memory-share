@@ -28,11 +28,15 @@ import {
   encodeProxy,
   extractPoster,
   photoNeedsView,
+  planIsEmpty,
+  planWork,
   probeVideo,
+  remuxProxy,
   renderPhotoView,
   type VideoStreamInfo,
+  type WorkPlan,
 } from '../core/transcode.ts';
-import type { BeginBody, UploadedPart, UploadRole } from '../core/types.ts';
+import type { Asset, BeginBody, UploadedPart, UploadRole } from '../core/types.ts';
 import { mapPool, type WalkedFile, walkPaths } from '../core/walk.ts';
 import { cyan, dim, yellow } from '../ui/color.ts';
 import { countAndSize, formatBytes, formatDuration, formatRate, plural } from '../ui/format.ts';
@@ -65,6 +69,10 @@ interface Candidate extends WalkedFile {
  * CLI to accidentally write a proxy to a standalone asset key.
  */
 interface Derived {
+  /** What still has to be produced and sent for this file. */
+  plan: WorkPlan;
+  /** The view was produced by a stream copy rather than a re-encode. */
+  remuxed?: boolean;
   /** The 1080p H.264 proxy, or the bounded JPEG for an oversize photo. */
   viewPath: string | null;
   viewMime: string;
@@ -128,49 +136,83 @@ export async function upload(args: ParsedArgs): Promise<number> {
   const probeEnabled = getBool(args, 'probe', true);
   await warnAboutMissingProbes(probeEnabled, work, json);
 
-  // Ask once what the pool already holds. Encoding is the most expensive thing
-  // this CLI does, and re-running a finished import must not re-encode a
-  // library only to discover at `begin` that every file was already there.
-  const alreadyInPool = await client
+  // Ask once what the pool already holds, rows and all. A derivative cannot
+  // short-circuit server-side — its hash is never persisted, so `begin` always
+  // reports exists:false for one — so the decision to skip an encode has to be
+  // made here, against the parent row's derivative keys.
+  const pool = await client
     .listAllAssets({})
-    .then((assets) => new Set(assets.map((asset) => asset.id)))
-    .catch(() => new Set<string>());
+    .then((assets) => new Map(assets.map((asset) => [asset.id, asset])))
+    .catch(() => new Map<string, Asset>());
 
   // ---------------------------------------------------- local processing ----
   const derived = new Map<string, Derived>();
   const transcodeFailures: Outcome[] = [];
-  const fresh = work.filter((candidate) => !alreadyInPool.has(candidate.sha256));
-  const freshVideos = fresh.filter((candidate) => candidate.kind === 'video');
-  const oversizePhotos = fresh.filter(
-    (candidate) => candidate.kind === 'photo' && photoNeedsView(candidate.bytes),
-  );
 
-  if (alreadyInPool.size > 0 && fresh.length < work.length && !json) {
-    const known = work.length - fresh.length;
+  const needsWork: Candidate[] = [];
+  // Files that need no bytes sent still need to appear in the outcomes: a
+  // re-run whose whole purpose is `--tag` must still tag them.
+  const settledOutcomes: Outcome[] = [];
+  for (const candidate of work) {
+    // Videos are re-planned after probing, once it is known whether the
+    // original is browser-safe; this pass only settles the unambiguous cases.
+    const plan = planWork({
+      kind: candidate.kind,
+      bytes: candidate.bytes,
+      existing: pool.get(candidate.sha256) ?? null,
+      transcode: transcodeEnabled,
+    });
+    if (planIsEmpty(plan)) {
+      settledOutcomes.push({
+        path: candidate.path,
+        filename: candidate.name,
+        sha256: candidate.sha256,
+        // The asset id IS the sha256 of the original, so no call is needed.
+        assetId: candidate.sha256,
+        bytes: candidate.bytes,
+        kind: candidate.kind,
+        status: 'skipped',
+      });
+    } else {
+      needsWork.push(candidate);
+    }
+  }
+
+  const settled = settledOutcomes.length;
+  if (settled > 0 && !json) {
     out.note(
-      `${known} of ${work.length} already in the pool — not re-processing ${known === 1 ? 'it' : 'them'}.`,
+      `${settled} of ${work.length} already complete in the pool — nothing to encode or send for ${
+        settled === 1 ? 'it' : 'them'
+      }.`,
     );
   }
 
-  if ((freshVideos.length > 0 && transcodeEnabled) || oversizePhotos.length > 0) {
+  const pendingVideos = needsWork.filter((candidate) => candidate.kind === 'video');
+  const pendingPhotos = needsWork.filter(
+    (candidate) => candidate.kind === 'photo' && photoNeedsView(candidate.bytes),
+  );
+
+  if ((pendingVideos.length > 0 && transcodeEnabled) || pendingPhotos.length > 0) {
     await announceEncoder(json);
     await processLocally(
-      transcodeEnabled ? freshVideos : [],
-      oversizePhotos,
+      transcodeEnabled ? pendingVideos : [],
+      pendingPhotos,
+      pool,
+      transcodeEnabled,
       jobs,
       json,
       derived,
       transcodeFailures,
     );
   }
-  if (freshVideos.length > 0 && !transcodeEnabled && !json) {
+  if (pendingVideos.length > 0 && !transcodeEnabled && !json) {
     out.warn(
-      `--no-transcode: ${freshVideos.length} video(s) upload without a browser-playable proxy.`,
+      `--no-transcode: ${pendingVideos.length} video(s) upload without a browser-playable proxy.`,
     );
   }
 
   // ---------------------------------------------------------------- upload --
-  const uploadable = work.filter(
+  const uploadable = needsWork.filter(
     (candidate) => !transcodeFailures.some((failure) => failure.sha256 === candidate.sha256),
   );
   const totalBytes = uploadable.reduce((sum, file) => sum + file.bytes, 0);
@@ -182,7 +224,7 @@ export async function upload(args: ParsedArgs): Promise<number> {
   });
   const gate = new Semaphore(concurrency);
 
-  const outcomes: Outcome[] = [...transcodeFailures];
+  const outcomes: Outcome[] = [...transcodeFailures, ...settledOutcomes];
   try {
     await mapPool(uploadable, concurrency, async (candidate) => {
       outcomes.push(
@@ -214,7 +256,9 @@ export async function upload(args: ParsedArgs): Promise<number> {
       skipped: skipped.length,
       failed: failed.length,
       duplicatesInBatch,
-      transcoded: [...derived.values()].filter((d) => d.viewPath !== null).length,
+      transcoded: [...derived.values()].filter((d) => d.viewPath !== null && d.remuxed !== true)
+        .length,
+      remuxed: [...derived.values()].filter((d) => d.remuxed === true).length,
       reusedOriginal: [...derived.values()].filter((d) => d.viewIsOriginal).length,
       photosWithoutView: outcomes.filter((outcome) => outcome.noView === true).length,
       tagged,
@@ -299,6 +343,8 @@ async function hashAll(
 async function processLocally(
   videos: readonly Candidate[],
   oversizePhotos: readonly Candidate[],
+  pool: ReadonlyMap<string, Asset>,
+  transcode: boolean,
   jobs: number,
   json: boolean,
   derived: Map<string, Derived>,
@@ -320,8 +366,12 @@ async function processLocally(
     await mapPool(work, jobs, async (candidate) => {
       progress.start(candidate.sha256, candidate.name, 100);
       try {
-        if (candidate.kind === 'photo') await derivePhoto(candidate, derived, progress);
-        else await deriveVideo(candidate, derived, progress);
+        const existing = pool.get(candidate.sha256) ?? null;
+        if (candidate.kind === 'photo') {
+          await derivePhoto(candidate, existing, derived, progress);
+        } else {
+          await deriveVideo(candidate, existing, transcode, derived, progress);
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         progress.finish(candidate.sha256, 'failed', candidate.name, message);
@@ -345,6 +395,8 @@ async function processLocally(
 
 async function deriveVideo(
   candidate: Candidate,
+  existing: Asset | null,
+  transcode: boolean,
   derived: Map<string, Derived>,
   progress: Progress,
 ): Promise<void> {
@@ -352,33 +404,64 @@ async function deriveVideo(
   if (info === null) throw new CliError('ffprobe could not read the file.');
 
   const decision = decideView(info);
-  const poster = await extractPoster(candidate.path, candidate.sha256, info.duration);
+  const viewIsOriginal = decision.action === 'reuse-original';
+  // Now that the source is understood, plan properly: an asset whose row
+  // already carries both keys needs neither an encode nor an upload.
+  const plan = planWork({
+    kind: 'video',
+    bytes: candidate.bytes,
+    existing,
+    viewIsOriginal,
+    transcode,
+  });
 
-  if (decision.action === 'reuse-original') {
+  const poster = plan.needsThumb
+    ? await extractPoster(candidate.path, candidate.sha256, info.duration)
+    : null;
+
+  if (viewIsOriginal || !plan.needsView) {
     derived.set(candidate.sha256, {
+      plan,
       viewPath: null,
       viewMime: 'video/mp4',
       posterPath: poster,
-      viewIsOriginal: true,
+      viewIsOriginal,
       undecodable: false,
-      reason: decision.reason,
+      reason: viewIsOriginal ? decision.reason : 'proxy already in the pool',
     });
     progress.advance(candidate.sha256, 100);
-    progress.finish(candidate.sha256, 'skipped', candidate.name, decision.reason);
+    progress.finish(
+      candidate.sha256,
+      'skipped',
+      candidate.name,
+      viewIsOriginal ? decision.reason : 'proxy already in the pool',
+    );
     return;
   }
 
-  let last = 0;
-  const result = await encodeProxy(candidate.path, candidate.sha256, info, (fraction) => {
-    const next = Math.round(fraction * 100);
-    if (next > last) {
-      progress.advance(candidate.sha256, next - last);
-      last = next;
-    }
-  });
-  if (last < 100) progress.advance(candidate.sha256, 100 - last);
+  // A remux is attempted first when the picture is already right, and falls
+  // back to a real encode if the bitstream cannot be copied into MP4.
+  let result =
+    decision.action === 'remux' ? await remuxProxy(candidate.path, candidate.sha256, info) : null;
+  const remuxFailed = decision.action === 'remux' && result === null;
+
+  if (result === null) {
+    let last = 0;
+    result = await encodeProxy(candidate.path, candidate.sha256, info, (fraction) => {
+      const next = Math.round(fraction * 100);
+      if (next > last) {
+        progress.advance(candidate.sha256, next - last);
+        last = next;
+      }
+    });
+    if (last < 100) progress.advance(candidate.sha256, 100 - last);
+  } else {
+    progress.advance(candidate.sha256, 100);
+  }
 
   derived.set(candidate.sha256, {
+    plan,
+    remuxed: result.remuxed,
     viewPath: result.path,
     viewMime: 'video/mp4',
     posterPath: poster,
@@ -390,9 +473,9 @@ async function deriveVideo(
     candidate.sha256,
     'uploaded',
     candidate.name,
-    `${result.width}×${result.height} ${formatBytes(result.bytes)}${
+    `${result.remuxed ? 'remux' : 'encode'} ${result.width}×${result.height} ${formatBytes(result.bytes)}${
       result.seconds > 0 ? ` in ${formatDuration(result.seconds)}` : ' (cached)'
-    }`,
+    }${remuxFailed ? ' (stream copy refused, re-encoded)' : ''}`,
   );
 }
 
@@ -405,21 +488,28 @@ async function deriveVideo(
  */
 async function derivePhoto(
   candidate: Candidate,
+  existing: Asset | null,
   derived: Map<string, Derived>,
   progress: Progress,
 ): Promise<void> {
-  const rendered = await renderPhotoView(candidate.path, candidate.sha256);
+  const plan = planWork({ kind: 'photo', bytes: candidate.bytes, existing, transcode: true });
+  const rendered = plan.needsView ? await renderPhotoView(candidate.path, candidate.sha256) : null;
   progress.advance(candidate.sha256, 100);
 
   derived.set(candidate.sha256, {
+    plan,
     viewPath: rendered,
     viewMime: 'image/jpeg',
     posterPath: null,
     viewIsOriginal: false,
-    undecodable: rendered === null,
+    undecodable: plan.needsView && rendered === null,
     reason: rendered === null ? 'ffmpeg could not decode it' : 'above the 20 MB Images cap',
   });
 
+  if (!plan.needsView) {
+    progress.finish(candidate.sha256, 'skipped', candidate.name, 'view already in the pool');
+    return;
+  }
   if (rendered === null) {
     progress.finish(
       candidate.sha256,
@@ -484,35 +574,54 @@ async function uploadOne(input: UploadOneInput): Promise<Outcome> {
     if (probeEnabled) Object.assign(body, await probeFile(candidate.path, candidate.kind));
 
     const begin = await gate.run(() => client.beginUpload(body));
-    if (begin.exists === true) {
+    const alreadyThere = begin.exists === true;
+
+    if (alreadyThere) {
       progress.advance(candidate.path, candidate.bytes);
+    } else {
+      if (begin.uploadId === undefined) {
+        throw new CliError('upload/begin returned no uploadId for a new asset.', {
+          code: EXIT.api,
+          hint: 'Uploads are always multipart; check the deployed worker version.',
+        });
+      }
+      const parts = await sendParts({
+        client,
+        gate,
+        candidate,
+        assetId: begin.assetId,
+        uploadId: begin.uploadId,
+        partSize,
+        progress,
+      });
+      await gate.run(() => client.completeUpload({ uploadId: begin.uploadId as string, parts }));
+      await clearJournal(candidate.sha256);
+    }
+
+    // The row that `begin` handed back is more current than the pool snapshot
+    // taken before the encode, so a derivative already present is not re-sent.
+    const row = begin.asset ?? null;
+    const wantView =
+      derived !== null &&
+      derived.viewPath !== null &&
+      !hasKey(row?.view_key) &&
+      derived.plan.needsView;
+    const wantThumb =
+      derived !== null &&
+      derived.posterPath !== null &&
+      !hasKey(row?.thumb_key) &&
+      derived.plan.needsThumb;
+
+    if (alreadyThere && !wantView && !wantThumb) {
       progress.finish(candidate.path, 'skipped', candidate.name, 'already in pool');
       await clearTranscodeArtifacts(candidate.sha256);
       return { ...base, assetId: begin.assetId, status: 'skipped', deriveState };
     }
 
-    if (begin.uploadId === undefined) {
-      throw new CliError('upload/begin returned no uploadId for a new asset.', {
-        code: EXIT.api,
-        hint: 'The contract says uploads are always multipart; check the deployed worker version.',
-      });
-    }
-
-    const parts = await sendParts({
-      client,
-      gate,
-      candidate,
-      assetId: begin.assetId,
-      uploadId: begin.uploadId,
-      partSize,
-      progress,
-    });
-    await gate.run(() => client.completeUpload({ uploadId: begin.uploadId as string, parts }));
-    await clearJournal(candidate.sha256);
-
     // Only now that the parent row exists can its derivatives be accepted.
-    if (derived !== null && derived.viewPath !== null) {
-      await uploadDerivative({
+    let derivativeBytes = 0;
+    if (wantView && derived !== null && derived.viewPath !== null) {
+      derivativeBytes += await uploadDerivative({
         client,
         gate,
         partSize,
@@ -522,8 +631,8 @@ async function uploadOne(input: UploadOneInput): Promise<Outcome> {
         mime: derived.viewMime,
       });
     }
-    if (derived !== null && derived.posterPath !== null) {
-      await uploadDerivative({
+    if (wantThumb && derived !== null && derived.posterPath !== null) {
+      derivativeBytes += await uploadDerivative({
         client,
         gate,
         partSize,
@@ -535,13 +644,32 @@ async function uploadOne(input: UploadOneInput): Promise<Outcome> {
     }
     await clearTranscodeArtifacts(candidate.sha256);
 
-    progress.finish(candidate.path, 'uploaded', candidate.name, formatBytes(candidate.bytes));
-    return { ...base, assetId: begin.assetId, status: 'uploaded', deriveState, noView };
+    // When the original was already there, only the derivatives crossed the
+    // wire — reporting the original's size would overstate what was sent.
+    const moved = alreadyThere ? derivativeBytes : candidate.bytes + derivativeBytes;
+    progress.finish(
+      candidate.path,
+      'uploaded',
+      candidate.name,
+      alreadyThere ? `derivatives only, ${formatBytes(moved)}` : formatBytes(candidate.bytes),
+    );
+    return {
+      ...base,
+      bytes: moved,
+      assetId: begin.assetId,
+      status: 'uploaded',
+      deriveState,
+      noView,
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     progress.finish(candidate.path, 'failed', candidate.name, message);
     return { ...base, assetId: null, status: 'failed', stage: 'upload', error: message };
   }
+}
+
+function hasKey(value: string | null | undefined): boolean {
+  return typeof value === 'string' && value !== '';
 }
 
 function sortParts(parts: readonly UploadedPart[]): UploadedPart[] {
@@ -670,7 +798,7 @@ interface DerivativeInput {
  * from `role` and `ofAsset`, which is what makes it impossible for a proxy to
  * become a standalone asset by accident.
  */
-async function uploadDerivative(input: DerivativeInput): Promise<void> {
+async function uploadDerivative(input: DerivativeInput): Promise<number> {
   const { client, gate, partSize, path, role, ofAsset, mime } = input;
   const { sha256, bytes } = await hashFile(path);
 
@@ -684,7 +812,7 @@ async function uploadDerivative(input: DerivativeInput): Promise<void> {
       ofAsset,
     }),
   );
-  if (begin.exists === true) return;
+  if (begin.exists === true) return 0;
   if (begin.uploadId === undefined) {
     throw new CliError(`upload/begin returned no uploadId for the ${role} of ${ofAsset}.`, {
       code: EXIT.api,
@@ -701,6 +829,7 @@ async function uploadDerivative(input: DerivativeInput): Promise<void> {
   });
 
   await gate.run(() => client.completeUpload({ uploadId, parts: sortParts(parts) }));
+  return bytes;
 }
 
 // ------------------------------------------------------------- reporting ----
@@ -729,12 +858,22 @@ function reportSummary(input: SummaryInput): void {
     );
   }
   const values = [...derived.values()];
-  const encoded = values.filter((d) => d.viewPath !== null && d.viewMime === 'video/mp4').length;
+  const remuxed = values.filter((d) => d.remuxed === true).length;
+  const encoded = values.filter(
+    (d) => d.viewPath !== null && d.viewMime === 'video/mp4' && d.remuxed !== true,
+  ).length;
   const reused = values.filter((d) => d.viewIsOriginal).length;
   const photoViews = values.filter(
     (d) => d.viewPath !== null && d.viewMime === 'image/jpeg',
   ).length;
   if (encoded > 0) out.line(dim(`${encoded} video ${plural(encoded, 'proxy', 'proxies')} encoded`));
+  if (remuxed > 0) {
+    out.line(
+      dim(
+        `${remuxed} video ${plural(remuxed, 'proxy', 'proxies')} remuxed (stream copy, no re-encode)`,
+      ),
+    );
+  }
   if (reused > 0) {
     out.line(dim(`${reused} video(s) already browser-safe, uploaded without a proxy`));
   }
@@ -892,9 +1031,11 @@ async function reportDryRun(
     const label =
       plan.action === 'encode'
         ? cyan('encode')
-        : plan.action === 'unreadable'
-          ? yellow('skip  ')
-          : dim('reuse ');
+        : plan.action === 'remux'
+          ? cyan('remux ')
+          : plan.action === 'unreadable'
+            ? yellow('skip  ')
+            : dim('reuse ');
     out.line(`  ${label}  ${plan.filename}  ${dim(plan.reason)}`);
   }
   if (tags.length > 0) out.note(`Would tag them ${tags.join(' ')}.`);

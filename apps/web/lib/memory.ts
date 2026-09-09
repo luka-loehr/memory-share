@@ -115,6 +115,8 @@ export type ResolvedAsset = Pick<
   | 'mime'
   | 'kind'
   | 'bytes'
+  | 'width'
+  | 'height'
   | 'orig_key'
   | 'view_key'
   | 'thumb_key'
@@ -136,8 +138,8 @@ export async function resolveAssetInMemory(
   assetId: string,
 ): Promise<ResolvedAsset | null> {
   const row = await env.DB.prepare(
-    `SELECT a.id, a.filename, a.mime, a.kind, a.bytes, a.orig_key, a.view_key,
-            a.thumb_key, a.view_is_original, a.derive_state
+    `SELECT a.id, a.filename, a.mime, a.kind, a.bytes, a.width, a.height,
+            a.orig_key, a.view_key, a.thumb_key, a.view_is_original, a.derive_state
        FROM memory_assets ma
        JOIN assets a ON a.id = ma.asset_id
       WHERE ma.memory_id = ?1 AND a.id = ?2

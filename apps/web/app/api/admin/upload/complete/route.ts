@@ -64,9 +64,9 @@ export async function POST(request: Request) {
     // Re-checked here and not only at `begin`: the asset may have been deleted
     // while the proxy was uploading, and a derivative must never outlive the
     // row that is the only thing able to reference it.
-    const parent = await env.DB.prepare(`SELECT id FROM assets WHERE id = ?1`)
+    const parent = await env.DB.prepare(`SELECT id, kind FROM assets WHERE id = ?1`)
       .bind(parentId)
-      .first<{ id: string }>();
+      .first<{ id: string; kind: 'photo' | 'video' }>();
     if (!parent) {
       await upload.abort().catch(() => undefined);
       await clearReceipts(env, token).catch(() => undefined);
@@ -86,11 +86,17 @@ export async function POST(request: Request) {
       return json({ error: 'size_mismatch' }, { status: 400 });
     }
 
-    // Only a `view` moves the state. A poster frame that landed before the
-    // proxy would otherwise mark the asset ready with `view_key` still NULL —
-    // precisely the state `derive_state` exists to tell apart.
+    // Only a `view` on a VIDEO moves the state. A poster frame that landed
+    // before the proxy would otherwise mark the asset ready with `view_key`
+    // still NULL — precisely the state `derive_state` exists to tell apart —
+    // and a photo is always ready by definition, so its oversize JPEG view must
+    // leave it `'skipped'` rather than briefly implying it was ever deriving
+    // (invariant 3).
     const column = columnFor(session.role);
-    const flip = session.role === 'view' ? `, derive_state = 'ready', derive_error = NULL` : '';
+    const flip =
+      session.role === 'view' && parent.kind === 'video'
+        ? `, derive_state = 'ready', derive_error = NULL`
+        : '';
     const updated = await env.DB.prepare(`UPDATE assets SET ${column} = ?1${flip} WHERE id = ?2`)
       .bind(session.key, parentId)
       .run();

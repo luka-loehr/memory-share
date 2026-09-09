@@ -17,7 +17,11 @@ import {
   parseProgress,
   photoNeedsView,
   photoViewArgs,
+  planIsEmpty,
+  planWork,
   posterArgs,
+  remuxArgs,
+  remuxProxy,
   scaleToFit,
   type VideoStreamInfo,
 } from '../src/core/transcode.ts';
@@ -54,18 +58,25 @@ describe('decideView', () => {
     expect(decideView(info({ width: 1080, height: 1920 })).action).toBe('encode');
   });
 
-  test('a non-MP4 container gets a proxy', () => {
-    const decision = decideView(info({ container: 'matroska,webm' }));
-    expect(decision.action).toBe('encode');
-    expect(decision.reason).toContain('not an MP4 container');
+  test('a non-MP4 container holding H.264 is remuxed, never re-encoded', () => {
+    const decision = decideView(info({ container: 'matroska,webm', extension: 'mkv' }));
+    expect(decision.action).toBe('remux');
+    expect(decision.reason).toContain('no re-encode');
   });
 
-  test('a .mov is re-encoded even though ffprobe reports the mp4 family for it', () => {
+  test('a .mov is remuxed — ffprobe reports the mp4 family for it either way', () => {
     // ffprobe gives .mov and .mp4 the identical format_name, so only the
-    // extension distinguishes a QuickTime container from a real MP4.
+    // extension distinguishes a QuickTime wrapper from a real MP4. The picture
+    // inside is already right, so only the container has to change.
     const decision = decideView(info({ extension: 'mov' }));
-    expect(decision.action).toBe('encode');
-    expect(decision.reason).toContain('.mov is not an MP4 container');
+    expect(decision.action).toBe('remux');
+    expect(decision.reason).toContain('.mov');
+  });
+
+  test('a remux is chosen only when the picture already qualifies', () => {
+    // Wrong codec or wrong size cannot be fixed by copying a stream.
+    expect(decideView(info({ extension: 'mov', codec: 'hevc' })).action).toBe('encode');
+    expect(decideView(info({ extension: 'mov', width: 3840, height: 2160 })).action).toBe('encode');
   });
 
   test('.mp4 and .m4v are both accepted as MP4', () => {
@@ -73,9 +84,10 @@ describe('decideView', () => {
     expect(decideView(info({ extension: 'm4v' })).action).toBe('reuse-original');
   });
 
-  test('an MP4 whose moov atom trails the media is re-encoded for faststart', () => {
+  test('an MP4 whose moov atom trails the media is remuxed, not re-encoded', () => {
+    // Moving the moov atom is a container rewrite; the picture is untouched.
     const decision = decideView(info({ faststart: false }));
-    expect(decision.action).toBe('encode');
+    expect(decision.action).toBe('remux');
     expect(decision.reason).toContain('moov');
   });
 
@@ -350,5 +362,224 @@ describe('deriveStateFor', () => {
     expect(deriveStateFor({ kind: 'video', viewIsOriginal: false, hasProxy: false })).toBe(
       'pending',
     );
+  });
+});
+
+describe('planWork', () => {
+  const absent = null;
+
+  test('a file not in the pool needs everything its kind implies', () => {
+    expect(planWork({ kind: 'photo', bytes: 1_000, existing: absent, transcode: true })).toEqual({
+      needsOriginal: true,
+      needsView: false,
+      needsThumb: false,
+    });
+    expect(
+      planWork({ kind: 'photo', bytes: 50_000_000, existing: absent, transcode: true }),
+    ).toEqual({ needsOriginal: true, needsView: true, needsThumb: false });
+    expect(planWork({ kind: 'video', bytes: 1_000, existing: absent, transcode: true })).toEqual({
+      needsOriginal: true,
+      needsView: true,
+      needsThumb: true,
+    });
+  });
+
+  test('a complete row needs nothing — this is what makes a re-run free', () => {
+    const plan = planWork({
+      kind: 'video',
+      bytes: 1_000,
+      existing: { view_key: 'view/x.mp4', thumb_key: 'thumb/x.jpg' },
+      transcode: true,
+    });
+    expect(planIsEmpty(plan)).toBe(true);
+  });
+
+  test('an ordinary photo already in the pool needs nothing', () => {
+    expect(
+      planIsEmpty(planWork({ kind: 'photo', bytes: 1_000, existing: {}, transcode: true })),
+    ).toBe(true);
+  });
+
+  test('a row missing only its proxy is repaired without re-sending the original', () => {
+    // The --no-transcode case, revisited later with transcoding on.
+    const plan = planWork({
+      kind: 'video',
+      bytes: 1_000,
+      existing: { view_key: null, thumb_key: null },
+      transcode: true,
+    });
+    expect(plan).toEqual({ needsOriginal: false, needsView: true, needsThumb: true });
+  });
+
+  test('a browser-safe video never wants a proxy, only a poster', () => {
+    expect(
+      planWork({
+        kind: 'video',
+        bytes: 1_000,
+        existing: absent,
+        viewIsOriginal: true,
+        transcode: true,
+      }),
+    ).toEqual({ needsOriginal: true, needsView: false, needsThumb: true });
+
+    expect(
+      planIsEmpty(
+        planWork({
+          kind: 'video',
+          bytes: 1_000,
+          existing: { thumb_key: 'thumb/x.jpg' },
+          viewIsOriginal: true,
+          transcode: true,
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  test('--no-transcode asks for the original alone', () => {
+    expect(planWork({ kind: 'video', bytes: 1_000, existing: absent, transcode: false })).toEqual({
+      needsOriginal: true,
+      needsView: false,
+      needsThumb: false,
+    });
+  });
+
+  test('an oversize photo whose view already landed needs nothing further', () => {
+    expect(
+      planIsEmpty(
+        planWork({
+          kind: 'photo',
+          bytes: 50_000_000,
+          existing: { view_key: 'view/x.jpg' },
+          transcode: true,
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  test('an empty-string key counts as absent, not as present', () => {
+    const plan = planWork({
+      kind: 'video',
+      bytes: 1_000,
+      existing: { view_key: '', thumb_key: '' },
+      transcode: true,
+    });
+    expect(plan.needsView).toBe(true);
+    expect(plan.needsThumb).toBe(true);
+  });
+});
+
+describe('remuxArgs', () => {
+  test('copies the video stream rather than encoding it', () => {
+    const args = remuxArgs({ input: 'in.mov', output: 'out.mp4', audioCodec: 'aac' });
+    expect(args[args.indexOf('-c:v') + 1]).toBe('copy');
+    expect(args).not.toContain('libx264');
+    expect(args).not.toContain('-crf');
+    expect(args).not.toContain('-vf');
+  });
+
+  test('faststart is still mandatory — that is half the point of remuxing', () => {
+    const args = remuxArgs({ input: 'in.mov', output: 'out.mp4', audioCodec: 'aac' });
+    expect(args[args.indexOf('-movflags') + 1]).toBe('+faststart');
+  });
+
+  test('AAC audio is copied through', () => {
+    const args = remuxArgs({ input: 'in.mov', output: 'out.mp4', audioCodec: 'aac' });
+    expect(args[args.indexOf('-c:a') + 1]).toBe('copy');
+  });
+
+  test('audio MP4 cannot usefully carry is re-encoded, cheaply', () => {
+    // PCM is common off a camera; MP4 can hold it but no browser plays it.
+    for (const codec of ['pcm_s16le', 'ac3', null, undefined]) {
+      const args = remuxArgs({ input: 'in.mov', output: 'out.mp4', audioCodec: codec });
+      expect(args[args.indexOf('-c:a') + 1]).toBe('aac');
+    }
+  });
+
+  test('audio stays optional, so a silent clip still remuxes', () => {
+    expect(remuxArgs({ input: 'in.mov', output: 'out.mp4', audioCodec: 'aac' })).toContain(
+      '0:a:0?',
+    );
+  });
+});
+
+describe('remuxProxy', () => {
+  test('returns null rather than throwing when a stream copy is impossible', async () => {
+    // The caller relies on this to fall back to a real encode instead of
+    // failing the file, which is what makes remux safe to attempt optimistically.
+    const dir = await mkdtemp(join(tmpdir(), 'ms-remux-'));
+    const previous = process.env.MS_CONFIG_PATH;
+    process.env.MS_CONFIG_PATH = join(dir, 'config.json');
+    try {
+      const result = await remuxProxy(join(dir, 'does-not-exist.mov'), 'c'.repeat(64), {
+        codec: 'h264',
+        width: 1280,
+        height: 720,
+        duration: 1,
+        container: 'mov,mp4',
+      });
+      expect(result).toBeNull();
+    } finally {
+      process.env.MS_CONFIG_PATH = previous;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a real .mov is copied through with its video stream untouched', async () => {
+    const ffmpeg = await findTool('ffmpeg');
+    if (ffmpeg === null) return;
+
+    const dir = await mkdtemp(join(tmpdir(), 'ms-remux-'));
+    const previous = process.env.MS_CONFIG_PATH;
+    process.env.MS_CONFIG_PATH = join(dir, 'config.json');
+    try {
+      const source = join(dir, 'src.mov');
+      await Bun.spawn(
+        [
+          ffmpeg.path,
+          '-loglevel',
+          'error',
+          '-y',
+          '-f',
+          'lavfi',
+          '-i',
+          'testsrc=size=320x240:duration=1',
+          '-c:v',
+          'libx264',
+          '-pix_fmt',
+          'yuv420p',
+          source,
+        ],
+        { stdout: 'ignore', stderr: 'ignore' },
+      ).exited;
+
+      const result = await remuxProxy(source, 'd'.repeat(64), {
+        codec: 'h264',
+        width: 320,
+        height: 240,
+        duration: 1,
+        container: 'mov,mp4',
+        extension: 'mov',
+      });
+      expect(result).not.toBeNull();
+      expect(result?.remuxed).toBe(true);
+      // No encoder ran, so none is reported.
+      expect(result?.encoder).toBeNull();
+
+      const md5 = async (path: string): Promise<string> => {
+        const proc = Bun.spawn(
+          [ffmpeg.path, '-v', 'quiet', '-i', path, '-map', '0:v', '-f', 'md5', '-'],
+          {
+            stdout: 'pipe',
+            stderr: 'ignore',
+          },
+        );
+        return (await new Response(proc.stdout).text()).trim();
+      };
+      // The whole promise of a remux: the picture is not touched.
+      expect(await md5(result?.path ?? '')).toBe(await md5(source));
+    } finally {
+      process.env.MS_CONFIG_PATH = previous;
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

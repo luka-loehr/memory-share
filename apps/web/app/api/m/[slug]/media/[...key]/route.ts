@@ -20,11 +20,49 @@ type Ctx = { params: Promise<{ slug: string; key: string[] }> };
  * carries only content hashes.
  */
 
-/** Photos are transformed at read time; the sizes come from the contract. */
+/*
+ * Photos are transformed at read time; the widths come from the contract.
+ *
+ * `quality` is not optional in practice. Without it the Images binding encodes
+ * near-losslessly, which produced 510 KB thumbnails in production — at ~500 KB
+ * a tile, a 284-item mosaic is ~145 MB, and the recipient is opening it on a
+ * phone. These two numbers are the whole fix. Exactly two (width, format,
+ * quality) combinations exist so the per-unique-params transform billing stays
+ * at two entries per photo.
+ */
 const TRANSFORM = {
-  thumb: { width: 480, format: 'image/webp' as const },
-  view: { width: 2560, format: 'image/jpeg' as const },
+  // Never seen larger than ~240px on screen, and always beside its neighbours.
+  thumb: { edge: 480, format: 'image/webp' as const, quality: 75 },
+  // Displayed full-bleed, so it earns more — but it is a *rendition*, not a
+  // second copy of the original.
+  view: { edge: 2560, format: 'image/jpeg' as const, quality: 84 },
 };
+
+/** The longest edge the `view` rendition is allowed to reach. */
+const VIEW_MAX_EDGE = 2560;
+
+/** Formats a browser renders natively. HEIC is deliberately absent. */
+const BROWSER_SAFE = /^image\/(jpeg|png|gif|webp|avif)$/;
+
+/**
+ * Is transforming this photo for `view` pure waste?
+ *
+ * When the original is already within the view cap and already a format the
+ * browser renders, a transform re-encodes it to something barely smaller — in
+ * production a 2.9 MB JPEG became a 1.8 MB JPEG for no benefit. Serving the
+ * original avoids the transform entirely.
+ *
+ * Gated on `allow_download`, and that gate is the whole point: where the owner
+ * has withheld originals, the bounded rendition must remain the only thing that
+ * leaves, however wasteful the encode. Cheapness never overrides the control.
+ */
+function viewCanServeOriginal(asset: ResolvedAsset, allowDownload: boolean): boolean {
+  if (!allowDownload) return false;
+  if (!BROWSER_SAFE.test(asset.mime)) return false;
+  // Unknown dimensions (0) must not be read as "small".
+  if (asset.width <= 0 || asset.height <= 0) return false;
+  return Math.max(asset.width, asset.height) <= VIEW_MAX_EDGE;
+}
 
 /**
  * Derivatives are named after their PARENT's hash, so a poster frame is
@@ -160,8 +198,13 @@ async function serveTransform(
     try {
       const result = await images
         .input(object.body)
-        .transform({ width: spec.width })
-        .output({ format: spec.format });
+        // Both axes, with scale-down: `width` alone caps only the width, so a
+        // 2160x3840 portrait passed through at full size and was merely
+        // re-encoded — which is how a "rendition" ended up nearly as heavy as
+        // the original it exists to spare the viewer. scale-down bounds the
+        // LONGEST edge and never upscales a small source.
+        .transform({ width: spec.edge, height: spec.edge, fit: 'scale-down' })
+        .output({ format: spec.format, quality: spec.quality });
 
       const response = result.response();
       const out = new Headers(headers);
@@ -232,6 +275,11 @@ async function handle(request: Request, ctx: Ctx, bodyless: boolean): Promise<Re
     // it is a stored object like any other, and it wins.
     if (variant === 'view' && asset.view_key) {
       return serveObject(gate.env, request, asset.view_key, asset.mime, undefined, bodyless);
+    }
+    // Already small enough and already renderable: the transform would only
+    // re-encode it. Hand over the bytes the browser would have accepted anyway.
+    if (variant === 'view' && viewCanServeOriginal(asset, gate.memory.allow_download === 1)) {
+      return serveObject(gate.env, request, asset.orig_key, asset.mime, undefined, bodyless);
     }
     return serveTransform(
       gate.env,

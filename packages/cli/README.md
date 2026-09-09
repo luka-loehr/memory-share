@@ -36,7 +36,9 @@ ms download --tag croatia --variant view ./proxies   # the 1080p renditions
 
 Interrupt any upload, encode or download and re-run the same command — finished
 files are skipped, partial transfers resume, and a proxy that finished encoding
-before the interruption is reused rather than encoded again.
+before the interruption is reused rather than encoded again. A re-run over a
+library that is already complete encodes nothing and sends nothing; one that is
+partly done sends only the pieces that are missing.
 
 ## What happens to your files
 
@@ -64,12 +66,15 @@ Those are listed by name at the end of the run.
 Transcoded **locally**, because the machine holding the footage is the one that
 should pay for it:
 
-- A clip that is **already H.264 in a real `.mp4` within 1080p** is uploaded
-  as-is and marked `view_is_original`. It is not re-encoded.
-- Anything else — HEVC, 4K, `.mov`, or an MP4 whose `moov` atom trails the media
-  — gets a `view/<sha>.mp4` proxy: H.264, scaled to fit 1080p, AAC audio, and
-  `-movflags +faststart` so a browser can play and seek without fetching the
-  whole file first.
+- A clip **already H.264 in a real `.mp4` within 1080p**, with its `moov` atom
+  up front, is uploaded as-is and marked `view_is_original`. Nothing is encoded.
+- A clip whose *picture* already qualifies but whose wrapper does not — a
+  `.mov`, an `.mkv`, or an MP4 with a trailing `moov` — is **remuxed**: the
+  H.264 stream is copied through untouched and only the container is rebuilt,
+  with faststart. Lossless and near-instant; no frame is re-encoded.
+- Anything else — HEVC, 4K, an unusual codec — gets a real `view/<sha>.mp4`
+  proxy: H.264, scaled to fit 1080p, AAC audio, and `-movflags +faststart` so a
+  browser can play and seek without fetching the whole file first.
 - Every video also gets a poster frame, taken ~1.5 s in rather than at frame 0,
   which on phone footage is usually a motion-blurred mid-lift.
 
@@ -171,7 +176,7 @@ test/           bun test, over the pure logic
 ## Development
 
 ```bash
-bun test          # 155 tests
+bun test          # 171 tests
 bun run typecheck # tsc --noEmit, strict
 bun run lint      # biome
 bun run fix       # biome --write

@@ -2,6 +2,7 @@ import { getAsset } from '@/lib/admin/assets';
 import { requireAdmin } from '@/lib/admin/auth';
 import { bool, int, num, readJson, str } from '@/lib/admin/parse';
 import {
+  extensionFor,
   keyFor,
   mintUploadId,
   SHA256,
@@ -64,9 +65,17 @@ export async function POST(request: Request) {
       .first<{ id: string }>();
     if (!parent) return json({ error: 'no_such_parent' }, { status: 409 });
 
-    const key = keyFor(role, sha256, ofAsset);
+    // A `view` may be an H.264 proxy for a video OR a bounded JPEG for a photo
+    // too large for the Images binding, so the type decides the key's extension
+    // and the stored content type. A thumb is always a poster JPEG.
+    if (role === 'view' && extensionFor(mime) === undefined) {
+      return json({ error: 'bad_view_mime' }, { status: 400 });
+    }
+    const contentType = role === 'thumb' ? 'image/jpeg' : mime;
+
+    const key = keyFor(role, sha256, ofAsset, mime);
     const multipart = await env.MEDIA.createMultipartUpload(key, {
-      httpMetadata: { contentType: role === 'view' ? 'video/mp4' : 'image/jpeg' },
+      httpMetadata: { contentType },
     });
 
     const session: UploadSession = {

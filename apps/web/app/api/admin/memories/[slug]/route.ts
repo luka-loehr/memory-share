@@ -1,6 +1,7 @@
 import { requireAdmin } from '@/lib/admin/auth';
 import { findAdminMemory, memoryItems, nextPosition, unknownAssets } from '@/lib/admin/memories';
 import { bool, idList, int, readJson, str } from '@/lib/admin/parse';
+import { batchInChunks } from '@/lib/admin/d1';
 import { json } from '@/lib/http';
 
 export const dynamic = 'force-dynamic';
@@ -126,7 +127,7 @@ export async function PATCH(request: Request, ctx: Ctx) {
     );
   }
 
-  await env.DB.batch(statements);
+  await batchInChunks(env.DB, statements);
 
   const updated = await findAdminMemory(env, slug);
   if (!updated) return json({ error: 'not_found' }, { status: 404 });

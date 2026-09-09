@@ -101,13 +101,28 @@ export async function nextPosition(env: Env, memoryId: string): Promise<number> 
   return (row?.top ?? -1) + 1;
 }
 
-/** Which of these ids are not in the pool. Used to refuse a bad membership edit. */
+/**
+ * Which of these ids are not in the pool. Used to refuse a bad membership edit.
+ *
+ * Chunked because D1 refuses a statement carrying more than 100 bound
+ * parameters, and this binds one per id. Creating a memory from a tag that
+ * matches a real library — the ordinary case, and the entire point of the
+ * product — sends hundreds at once.
+ */
+const D1_MAX_BOUND_PARAMS = 90;
+
 export async function unknownAssets(env: Env, ids: string[]): Promise<string[]> {
   if (ids.length === 0) return [];
-  const placeholders = ids.map((_, i) => `?${i + 1}`).join(', ');
-  const { results } = await env.DB.prepare(`SELECT id FROM assets WHERE id IN (${placeholders})`)
-    .bind(...ids)
-    .all<{ id: string }>();
-  const known = new Set((results ?? []).map((row) => row.id));
+  const known = new Set<string>();
+
+  for (let start = 0; start < ids.length; start += D1_MAX_BOUND_PARAMS) {
+    const slice = ids.slice(start, start + D1_MAX_BOUND_PARAMS);
+    const placeholders = slice.map((_, i) => `?${i + 1}`).join(', ');
+    const { results } = await env.DB.prepare(`SELECT id FROM assets WHERE id IN (${placeholders})`)
+      .bind(...slice)
+      .all<{ id: string }>();
+    for (const row of results ?? []) known.add(row.id);
+  }
+
   return ids.filter((id) => !known.has(id));
 }
