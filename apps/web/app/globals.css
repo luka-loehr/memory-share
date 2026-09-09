@@ -1,0 +1,135 @@
+/*
+ * memory-share — "darkroom"
+ *
+ * The whole interface is built as a darkroom under safelight: a warm near-black
+ * ground, silver-gelatin greys, and exactly one accent (safelight amber) which
+ * is spent only on things that matter — the unlock action, the selection tray,
+ * the developing plate. Photographs are the only saturated thing on screen.
+ */
+
+:root {
+  /* ground */
+  --ink: #0a0908;
+  --plate: #12100e;
+  --plate-raised: #1a1714;
+  --edge: #262019;
+  --edge-bright: #3a3128;
+
+  /* type */
+  --silver: #ece5da;
+  --ash: #9a9086;
+  --ash-dim: #6b625a;
+
+  /* the one accent */
+  --safelight: #d2492c;
+  --safelight-warm: #e5883c;
+  --safelight-glow: rgba(210, 73, 44, 0.22);
+
+  --font-display: var(--font-fraunces), "Iowan Old Style", Georgia, serif;
+  --font-ui: var(--font-instrument), "Helvetica Neue", sans-serif;
+
+  /* justified-mosaic base row height */
+  --row: 260px;
+
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  color-scheme: dark;
+}
+
+@media (max-width: 720px) {
+  :root {
+    --row: 168px;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--ink);
+  color: var(--silver);
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  min-height: 100svh;
+  /* Film grain. Fixed, so it sits on the light rather than on the content. */
+  position: relative;
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0.28;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+a {
+  color: inherit;
+}
+
+/* One focus treatment everywhere: a safelight ring, always visible when the
+   keyboard is driving. Never removed, only shaped. */
+:focus-visible {
+  outline: 2px solid var(--safelight-warm);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+/* ---------------------------------------------------------------- type ---- */
+
+.display {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-variation-settings:
+    "SOFT" 30,
+    "WONK" 1,
+    "opsz" 96;
+  letter-spacing: -0.02em;
+  line-height: 0.98;
+  margin: 0;
+}
+
+/* Letter-spaced small caps carry every label, timestamp and count in the app —
+   the one typographic mannerism the whole thing is built on. */
+.label {
+  font-family: var(--font-ui);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ash);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "@memory-share/ffmpeg-linux-arm64",
+  "version": "0.1.0",
+  "description": "Static ffmpeg and ffprobe for linux-arm64, bundled with the memory-share CLI",
+  "license": "GPL-3.0-or-later",
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "files": ["bin", "README.md"],
+  "preferUnplugged": true
+}

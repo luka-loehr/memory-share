@@ -1,0 +1,4 @@
+# Vendored at release time by packages/cli/scripts/vendor-ffmpeg.ts.
+# ~50 MB per binary; never committed.
+bin/*
+!bin/.gitkeep

@@ -1,0 +1,202 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background: rgba(6, 5, 5, 0.96);
+  backdrop-filter: blur(28px) saturate(0.9);
+  -webkit-backdrop-filter: blur(28px) saturate(0.9);
+  animation: fade 260ms var(--ease) both;
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+
+/*
+ * Everything textual lives in this top bar. The bottom of the screen is left
+ * entirely to the video player's own control strip — a caption or title bar
+ * overlapping the scrubber is precisely what makes a player unseekable.
+ */
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px clamp(14px, 3vw, 30px);
+  border-bottom: 1px solid rgba(38, 32, 25, 0.8);
+}
+
+.barInfo {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.filename {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.875rem;
+  color: var(--silver);
+}
+
+.barActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.iconButton {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--ash);
+  cursor: pointer;
+  transition:
+    color 180ms var(--ease),
+    border-color 180ms var(--ease),
+    background-color 180ms var(--ease);
+}
+
+.iconButton:hover:not(:disabled) {
+  color: var(--silver);
+  border-color: var(--edge-bright);
+}
+
+.iconButton:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.textButton {
+  padding: 8px 13px;
+  border: 1px solid var(--edge-bright);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--ash);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition:
+    color 180ms var(--ease),
+    border-color 180ms var(--ease);
+}
+
+.textButton:hover {
+  color: var(--silver);
+  border-color: var(--safelight);
+}
+
+.stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  padding: clamp(10px, 2.2vw, 26px);
+}
+
+.photo {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+  animation: settle 420ms var(--ease) both;
+}
+
+@keyframes settle {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+}
+
+.developing {
+  width: min(560px, 80vw);
+  aspect-ratio: 3 / 2;
+  display: grid;
+  place-items: center;
+  gap: 12px;
+  border: 1px solid var(--edge);
+  background:
+    linear-gradient(115deg, transparent 12%, var(--safelight-glow) 46%, transparent 76%),
+    linear-gradient(150deg, #171310, #0e0c0a);
+  background-size:
+    260% 100%,
+    100% 100%;
+  animation: develop 3.6s ease-in-out infinite;
+  text-align: center;
+  padding: 24px;
+}
+
+@keyframes develop {
+  0% {
+    background-position:
+      130% 0,
+      0 0;
+  }
+  100% {
+    background-position:
+      -110% 0,
+      0 0;
+  }
+}
+
+/* Arrows are placed against the frame edges, away from the bottom strip. */
+.nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 3;
+  width: 46px;
+  height: 66px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  background: rgba(10, 9, 8, 0.5);
+  backdrop-filter: blur(10px);
+  color: var(--ash);
+  cursor: pointer;
+  transition:
+    color 180ms var(--ease),
+    background-color 180ms var(--ease);
+}
+
+.nav:hover {
+  color: var(--silver);
+  background: rgba(18, 16, 14, 0.85);
+}
+
+.navPrev {
+  left: 0;
+}
+
+.navNext {
+  right: 0;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px clamp(14px, 3vw, 30px);
+  border-top: 1px solid rgba(38, 32, 25, 0.8);
+}
+
+/* Videos get no footer at all — see the note on .bar. */
+.footerHidden {
+  display: none;
+}

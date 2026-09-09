@@ -1,0 +1,315 @@
+.player {
+  position: relative;
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  background: #000;
+  line-height: 0;
+  outline: none;
+}
+
+.video {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  /* In fullscreen the container fills the screen; the frame should letterbox. */
+  width: auto;
+  height: auto;
+}
+
+.player:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  display: grid;
+  place-items: center;
+}
+
+.player:fullscreen .video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* ------------------------------------------------------------ controls ---- */
+
+/*
+ * The bottom strip is the player's alone. Nothing else in the app is allowed to
+ * render here: the scrubber sits at its top edge with clear space above it, so
+ * a pointer aiming for a seek can never land on a caption instead.
+ */
+.controls {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 4;
+  padding: 44px 14px 12px;
+  background: linear-gradient(transparent, rgba(6, 5, 5, 0.82) 42%, rgba(6, 5, 5, 0.95));
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    opacity 260ms var(--ease),
+    transform 260ms var(--ease);
+}
+
+.controlsHidden {
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.time {
+  padding: 0 8px;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.06em;
+  color: var(--ash);
+  line-height: 1;
+}
+
+.timeNow {
+  color: var(--silver);
+}
+
+.button {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--silver);
+  cursor: pointer;
+  transition:
+    color 160ms var(--ease),
+    background-color 160ms var(--ease);
+}
+
+.button:hover {
+  background: rgba(236, 229, 218, 0.1);
+}
+
+.button[aria-pressed="true"] {
+  color: var(--safelight-warm);
+}
+
+.wide {
+  width: auto;
+  padding: 0 10px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------ scrubber ---- */
+
+.scrubber {
+  position: relative;
+  height: 22px; /* generous hit area; the visible rail is thinner */
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.rail {
+  position: relative;
+  width: 100%;
+  height: 3px;
+  background: rgba(236, 229, 218, 0.18);
+  overflow: hidden;
+  transition: height 160ms var(--ease);
+}
+
+.scrubber:hover .rail,
+.scrubber:focus-visible .rail,
+.scrubbing .rail {
+  height: 6px;
+}
+
+.buffered {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(236, 229, 218, 0.3);
+}
+
+.played {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: var(--safelight);
+}
+
+.knob {
+  position: absolute;
+  top: 50%;
+  width: 11px;
+  height: 11px;
+  margin-left: -5.5px;
+  border-radius: 50%;
+  background: var(--safelight-warm);
+  transform: translateY(-50%) scale(0);
+  transition: transform 160ms var(--ease);
+  pointer-events: none;
+}
+
+.scrubber:hover .knob,
+.scrubber:focus-visible .knob,
+.scrubbing .knob {
+  transform: translateY(-50%) scale(1);
+}
+
+/* Hover-scrub readout, pinned above the rail — never over it. */
+.preview {
+  position: absolute;
+  bottom: 26px;
+  transform: translateX(-50%);
+  padding: 4px 7px;
+  border: 1px solid var(--edge-bright);
+  border-radius: 2px;
+  background: rgba(10, 9, 8, 0.94);
+  color: var(--silver);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* -------------------------------------------------------------- volume ---- */
+
+.volume {
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  width: 0;
+  opacity: 0;
+  transition:
+    width 240ms var(--ease),
+    opacity 200ms var(--ease);
+}
+
+.volumeGroup:hover .volume,
+.volumeGroup:focus-within .volume {
+  width: 78px;
+  opacity: 1;
+}
+
+.volumeGroup {
+  display: flex;
+  align-items: center;
+}
+
+.slider {
+  width: 70px;
+  margin: 0 6px;
+  accent-color: var(--safelight);
+  background: transparent;
+  cursor: pointer;
+}
+
+/* --------------------------------------------------------------- speed ---- */
+
+.menuWrap {
+  position: relative;
+}
+
+.menu {
+  position: absolute;
+  right: 0;
+  bottom: 40px;
+  min-width: 88px;
+  padding: 5px;
+  border: 1px solid var(--edge-bright);
+  border-radius: 2px;
+  background: rgba(14, 12, 10, 0.97);
+  box-shadow: 0 20px 40px -18px rgba(0, 0, 0, 0.9);
+}
+
+.menuItem {
+  display: block;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  background: transparent;
+  color: var(--ash);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.menuItem:hover {
+  background: rgba(236, 229, 218, 0.08);
+  color: var(--silver);
+}
+
+.menuItemOn {
+  color: var(--safelight-warm);
+}
+
+/* ------------------------------------------------------------- overlay ---- */
+
+.bigPlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--silver);
+  cursor: pointer;
+}
+
+.bigPlayDisc {
+  display: grid;
+  place-items: center;
+  width: 76px;
+  height: 76px;
+  border: 1px solid rgba(236, 229, 218, 0.4);
+  border-radius: 50%;
+  background: rgba(10, 9, 8, 0.5);
+  backdrop-filter: blur(10px);
+  transition:
+    transform 260ms var(--ease),
+    background-color 260ms var(--ease);
+}
+
+.bigPlay:hover .bigPlayDisc {
+  background: rgba(210, 73, 44, 0.75);
+  transform: scale(1.06);
+}
+
+.stalled {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 4;
+  padding: 6px 10px;
+  border: 1px solid var(--edge-bright);
+  border-radius: 2px;
+  background: rgba(10, 9, 8, 0.8);
+  line-height: 1;
+}
+
+.cursorHidden {
+  cursor: none;
+}

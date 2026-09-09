@@ -1,0 +1,24 @@
+# Secrets — never commit
+.dev.vars
+.dev.vars.*
+.env
+.env.*
+*.pem
+.memory-share/
+
+# Build output
+.next/
+.open-next/
+.wrangler/
+dist/
+out/
+
+# Dependencies
+node_modules/
+
+# Generated
+cloudflare-env.d.ts
+next-env.d.ts
+*.tsbuildinfo
+
+.DS_Store

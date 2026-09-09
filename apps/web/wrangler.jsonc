@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "memory-share-web",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "observability": { "enabled": true },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "memory-share",
+      "database_id": "00000000-0000-0000-0000-000000000000"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "MEDIA",
+      "bucket_name": "memory-share-media"
+    }
+  ],
+  // Used to derive the gate cover: the stored thumbnail is downsampled server-side
+  // so a legible frame never crosses the wire before unlock.
+  "images": { "binding": "IMAGES" },
+
+  "vars": {
+    "SESSION_TTL_SECONDS": "43200"
+  }
+}

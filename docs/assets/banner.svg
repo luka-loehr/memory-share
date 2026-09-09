@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="320" viewBox="0 0 1280 320" role="img" aria-label="memory-share">
+  <defs>
+    <linearGradient id="ground" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a0908"/>
+      <stop offset="55%" stop-color="#12100e"/>
+      <stop offset="100%" stop-color="#0a0908"/>
+    </linearGradient>
+
+    <!-- safelight, bottom-left, the way a darkroom lamp actually falls -->
+    <radialGradient id="safelight" cx="0.13" cy="0.95" r="0.85">
+      <stop offset="0%" stop-color="#d2492c" stop-opacity="0.30"/>
+      <stop offset="45%" stop-color="#d2492c" stop-opacity="0.07"/>
+      <stop offset="100%" stop-color="#d2492c" stop-opacity="0"/>
+    </radialGradient>
+
+    <filter id="grain">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3"/>
+      <feColorMatrix type="saturate" values="0"/>
+    </filter>
+
+    <!-- one frame's worth of Bayer-ish dot field, the gate's signature -->
+    <pattern id="halftone" width="8" height="8" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.15" fill="#e8e2d6" opacity="0.5"/>
+      <circle cx="6" cy="6" r="0.75" fill="#e8e2d6" opacity="0.3"/>
+    </pattern>
+
+    <linearGradient id="fade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#fff" stop-opacity="0.95"/>
+      <stop offset="70%" stop-color="#fff" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <mask id="platemask">
+      <rect x="782" y="74" width="430" height="172" fill="url(#fade)"/>
+    </mask>
+  </defs>
+
+  <rect width="1280" height="320" fill="url(#ground)"/>
+  <rect width="1280" height="320" fill="url(#safelight)"/>
+
+  <!-- the plate, half out of the developer: a frame dissolving into dots -->
+  <g mask="url(#platemask)">
+    <rect x="782" y="74" width="430" height="172" fill="url(#halftone)"/>
+    <rect x="782" y="74" width="430" height="172" fill="none" stroke="#e8e2d6" stroke-opacity="0.14"/>
+  </g>
+
+  <text x="88" y="140" font-family="Iowan Old Style, Palatino, Georgia, serif"
+        font-size="76" fill="#f2ede3" letter-spacing="-1.5">memory<tspan fill="#d2492c">-</tspan>share</text>
+
+  <text x="92" y="186" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+        font-size="15" letter-spacing="5.2" fill="#8d857a">UPLOAD ONCE · SHARE MANY · NOTHING RECOMPRESSED</text>
+
+  <line x1="92" y1="222" x2="1188" y2="222" stroke="#e8e2d6" stroke-opacity="0.10"/>
+
+  <text x="92" y="256" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+        font-size="13" letter-spacing="2.6" fill="#6f6961">CLOUDFLARE WORKERS · R2 · D1 · BUN CLI · SELF-DEPLOYED</text>
+
+  <rect width="1280" height="320" filter="url(#grain)" opacity="0.055" style="mix-blend-mode:overlay"/>
+</svg>

@@ -1,0 +1,38 @@
+{
+  "name": "@memory-share/cli",
+  "version": "0.1.0",
+  "description": "ms \u2014 the memory-share command line",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "ms": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "NOTES.md"
+  ],
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "scripts": {
+    "ms": "bun run src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check src test",
+    "fix": "biome check --write src test",
+    "vendor:ffmpeg": "bun run scripts/vendor-ffmpeg.ts"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.12",
+    "@types/bun": "latest",
+    "typescript": "7.0.2"
+  },
+  "optionalDependencies": {
+    "@memory-share/ffmpeg-darwin-arm64": "file:../ffmpeg-darwin-arm64",
+    "@memory-share/ffmpeg-darwin-x64": "file:../ffmpeg-darwin-x64",
+    "@memory-share/ffmpeg-linux-x64": "file:../ffmpeg-linux-x64",
+    "@memory-share/ffmpeg-linux-arm64": "file:../ffmpeg-linux-arm64",
+    "@memory-share/ffmpeg-win32-x64": "file:../ffmpeg-win32-x64"
+  }
+}

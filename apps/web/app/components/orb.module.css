@@ -1,0 +1,98 @@
+.orb {
+  position: fixed;
+  right: clamp(14px, 2.4vw, 28px);
+  bottom: clamp(14px, 2.4vw, 28px);
+  z-index: 60;
+
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+
+  height: 38px;
+  padding: 0 11px;
+  border: 1px solid var(--edge-bright);
+  border-radius: 999px;
+  background: rgba(18, 16, 14, 0.72);
+  backdrop-filter: blur(14px) saturate(1.2);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  color: var(--ash);
+  text-decoration: none;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+
+  transition:
+    gap 420ms var(--ease),
+    padding 420ms var(--ease),
+    color 260ms var(--ease),
+    border-color 260ms var(--ease),
+    background-color 260ms var(--ease);
+}
+
+/* The dot is the resting state; the label is the expansion. Collapsed, the
+   label is a zero-width overflow rather than display:none, so it can actually
+   animate open. */
+.dot {
+  position: relative;
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--safelight);
+  box-shadow: 0 0 0 0 var(--safelight-glow);
+  animation: pulse 4.8s var(--ease) infinite;
+}
+
+.label {
+  max-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  opacity: 0;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  transition:
+    max-width 420ms var(--ease),
+    opacity 260ms var(--ease) 60ms;
+}
+
+.orb:hover,
+.orb:focus-visible {
+  gap: 9px;
+  color: var(--silver);
+  border-color: var(--safelight);
+  background: rgba(26, 23, 20, 0.86);
+}
+
+.orb:hover .label,
+.orb:focus-visible .label {
+  max-width: 190px;
+  opacity: 1;
+}
+
+@keyframes pulse {
+  0%,
+  72%,
+  100% {
+    box-shadow: 0 0 0 0 var(--safelight-glow);
+  }
+  84% {
+    box-shadow: 0 0 0 7px rgba(210, 73, 44, 0);
+  }
+}
+
+/* Suppressed rather than unmounted, so it fades out from over the gallery
+   instead of vanishing the instant a photo opens. */
+.hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(6px);
+  transition:
+    opacity 200ms var(--ease),
+    transform 200ms var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot {
+    animation: none;
+  }
+}

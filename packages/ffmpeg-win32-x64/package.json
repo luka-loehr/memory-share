@@ -1,0 +1,10 @@
+{
+  "name": "@memory-share/ffmpeg-win32-x64",
+  "version": "0.1.0",
+  "description": "Static ffmpeg and ffprobe for win32-x64, bundled with the memory-share CLI",
+  "license": "GPL-3.0-or-later",
+  "os": ["win32"],
+  "cpu": ["x64"],
+  "files": ["bin", "README.md"],
+  "preferUnplugged": true
+}
