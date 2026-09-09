@@ -31,19 +31,38 @@ ms tag a1b2c3d4 --add favourites
 ms memory create "Croatia 2019" --tag croatia --expires 30d
 ms memory set croatia-2019 --expires 90d
 ms download croatia-2019 ./backup
+ms download --tag croatia --variant view ./proxies   # the 1080p renditions
 ```
 
 Interrupt any upload, encode or download and re-run the same command — finished
 files are skipped, partial transfers resume, and a proxy that finished encoding
 before the interruption is reused rather than encoded again.
 
-## Video
+## What happens to your files
 
-Photos are never touched: the edge transforms them at read time, so `ms upload`
-sends the original and nothing else.
+Per file: hash it, work out what it needs, produce any derivatives locally,
+upload the original, then upload its derivatives. Re-running an import that
+already finished costs one API call and re-encodes nothing.
 
-Video is transcoded **locally**, because the machine holding the footage is the
-one that should pay for it:
+### Photos
+
+Almost always uploaded untouched — the edge transforms them at read time, so
+storing a copy would multiply your bill for no benefit.
+
+The one exception is a photo **larger than 20 MB**, which the Cloudflare Images
+binding refuses as input. Those get a bounded `view/<sha>.jpg` produced locally:
+longest edge 2560, EXIF orientation applied, metadata stripped. Rare files —
+panoramas, ProRAW, stitched images — so the added storage is negligible.
+
+If ffmpeg cannot decode such a photo (ProRAW DNG is the realistic case), the
+upload still succeeds: the original goes up, the asset simply has no view, and
+the share page shows a placeholder rather than serving the full-resolution file.
+Those are listed by name at the end of the run.
+
+### Video
+
+Transcoded **locally**, because the machine holding the footage is the one that
+should pay for it:
 
 - A clip that is **already H.264 in a real `.mp4` within 1080p** is uploaded
   as-is and marked `view_is_original`. It is not re-encoded.
@@ -53,6 +72,9 @@ one that should pay for it:
   whole file first.
 - Every video also gets a poster frame, taken ~1.5 s in rather than at frame 0,
   which on phone footage is usually a motion-blurred mid-lift.
+
+Derivatives are named after their parent and never become assets of their own —
+`ms ls` shows your photographs, not the machinery behind them.
 
 Hardware encoding is used when the ffmpeg build actually reports it —
 `h264_videotoolbox` on macOS, `h264_nvenc` on Linux with NVIDIA — falling back
@@ -149,7 +171,7 @@ test/           bun test, over the pure logic
 ## Development
 
 ```bash
-bun test          # 144 tests
+bun test          # 155 tests
 bun run typecheck # tsc --noEmit, strict
 bun run lint      # biome
 bun run fix       # biome --write

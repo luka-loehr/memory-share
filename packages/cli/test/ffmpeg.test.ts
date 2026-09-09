@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { hasStoredView } from '../src/commands/download.ts';
 import {
   binaryName,
   bundledDirectory,
@@ -15,6 +16,7 @@ import {
   platformKey,
   systemPath,
 } from '../src/core/ffmpeg.ts';
+import type { Asset } from '../src/core/types.ts';
 
 describe('platformKey', () => {
   test('maps the five supported hosts', () => {
@@ -184,5 +186,27 @@ describe('bundled resolution', () => {
       process.env.MS_FFMPEG_PATH = undefined;
       clearToolCache();
     }
+  });
+});
+
+describe('hasStoredView', () => {
+  const base: Omit<Asset, 'kind'> = {
+    id: 'a'.repeat(64),
+    filename: 'x.jpg',
+    mime: 'image/jpeg',
+    bytes: 1,
+  };
+
+  test('follows view_key, so an oversize photo counts', () => {
+    expect(hasStoredView({ ...base, kind: 'photo', view_key: `view/${base.id}.jpg` })).toBe(true);
+  });
+
+  test('an ordinary photo has none — the edge renders it on the fly', () => {
+    expect(hasStoredView({ ...base, kind: 'photo' })).toBe(false);
+    expect(hasStoredView({ ...base, kind: 'photo', view_key: null })).toBe(false);
+  });
+
+  test('a video counts even before its row reports a key', () => {
+    expect(hasStoredView({ ...base, kind: 'video', filename: 'x.mp4' })).toBe(true);
   });
 });

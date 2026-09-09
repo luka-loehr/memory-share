@@ -24,6 +24,7 @@ import {
   chooseEncoder,
   clearTranscodeArtifacts,
   decideView,
+  deriveStateFor,
   encodeProxy,
   extractPoster,
   photoNeedsView,
@@ -85,7 +86,7 @@ interface Outcome {
   kind: 'photo' | 'video';
   status: 'uploaded' | 'skipped' | 'failed';
   stage?: 'transcode' | 'upload';
-  deriveState?: 'ready' | 'skipped';
+  deriveState?: 'ready' | 'skipped' | 'pending';
   /** An oversize photo that could not be rendered; uploaded without a view. */
   noView?: boolean;
   error?: string;
@@ -422,9 +423,9 @@ async function derivePhoto(
   if (rendered === null) {
     progress.finish(
       candidate.sha256,
-      'failed',
+      'skipped',
       candidate.name,
-      'cannot decode; uploading the original alone',
+      'cannot decode locally; original only, no view',
     );
     return;
   }
@@ -459,10 +460,11 @@ async function uploadOne(input: UploadOneInput): Promise<Outcome> {
     bytes: candidate.bytes,
     kind: candidate.kind,
   };
-  // A photo is never mid-derivation, and a video whose original is already
-  // browser-safe has nothing pending either.
-  const deriveState: 'ready' | 'skipped' =
-    candidate.kind === 'photo' || derived?.viewIsOriginal === true ? 'skipped' : 'ready';
+  const deriveState = deriveStateFor({
+    kind: candidate.kind,
+    viewIsOriginal: derived?.viewIsOriginal === true,
+    hasProxy: derived?.viewPath !== null && derived !== null,
+  });
   const noView = derived?.undecodable === true;
 
   try {

@@ -516,3 +516,22 @@ export async function clearTranscodeArtifacts(sha256: string): Promise<void> {
     await rm(`${path}.partial`, { force: true });
   }
 }
+
+/**
+ * What `derive_state` an asset should end up at.
+ *
+ * A photo is always `'skipped'`, even an oversize one whose view rendition is
+ * still in flight: invariant 3 says a photo must never render as developing.
+ * A video whose original is already browser-safe is settled too — no proxy is
+ * coming. Everything else is `'ready'` once its proxy lands, and `'pending'`
+ * only in the window before that.
+ */
+export function deriveStateFor(input: {
+  kind: 'photo' | 'video';
+  viewIsOriginal: boolean;
+  hasProxy: boolean;
+}): 'ready' | 'skipped' | 'pending' {
+  if (input.kind === 'photo') return 'skipped';
+  if (input.viewIsOriginal) return 'skipped';
+  return input.hasProxy ? 'ready' : 'pending';
+}

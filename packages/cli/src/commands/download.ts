@@ -85,15 +85,18 @@ export async function download(args: ParsedArgs): Promise<number> {
     out.note(`${label} has nothing to download.`);
     return 0;
   }
+
   if (variant === 'view') {
+    // Most photos store no view at all — the edge renders those on the fly —
+    // so membership here follows view_key rather than kind.
     const before = assets.length;
-    assets = assets.filter((asset) => asset.kind === 'video');
+    assets = assets.filter((asset) => hasStoredView(asset));
     if (assets.length === 0) {
-      out.note('--variant view is video only, and none of those assets are video.');
+      out.note('None of those assets has a stored view; photos are rendered by the edge.');
       return 0;
     }
     if (assets.length < before) {
-      out.note(`${before - assets.length} photo(s) skipped — photos have no stored view.`);
+      out.note(`${before - assets.length} without a stored view skipped.`);
     }
   }
 
@@ -169,6 +172,16 @@ export async function download(args: ParsedArgs): Promise<number> {
 
   if (corrupt.length > 0) return EXIT.integrity;
   return failed.length > 0 ? EXIT.api : 0;
+}
+
+/**
+ * A stored view exists for a transcoded video and for a photo too large for the
+ * Images binding. A video marked view_is_original has one too — it is the
+ * original itself.
+ */
+export function hasStoredView(asset: Asset): boolean {
+  if (typeof asset.view_key === 'string' && asset.view_key !== '') return true;
+  return asset.kind === 'video' && asset.derive_state !== 'failed';
 }
 
 function assertVariant(value: string | undefined): 'orig' | 'view' {
@@ -270,7 +283,11 @@ function safeFilename(asset: Asset, variant: 'orig' | 'view'): string {
   const raw = (asset.filename ?? asset.id).replace(/[/\\]/g, '_').replace(/^\.+/, '');
   const cleaned = raw.trim() === '' ? asset.id : raw;
   const short = asset.id.slice(0, 8);
-  if (variant === 'view') return `${basename(cleaned, extname(cleaned))}-${short}.view.mp4`;
+  if (variant === 'view') {
+    const stored = typeof asset.view_key === 'string' ? extname(asset.view_key) : '';
+    const ext = stored !== '' ? stored : asset.kind === 'video' ? '.mp4' : '.jpg';
+    return `${basename(cleaned, extname(cleaned))}-${short}.view${ext}`;
+  }
   const ext = extname(cleaned);
   return `${basename(cleaned, ext)}-${short}${ext}`;
 }

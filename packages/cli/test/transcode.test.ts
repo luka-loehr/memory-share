@@ -7,6 +7,7 @@ import { findTool } from '../src/core/ffmpeg.ts';
 import {
   bitrateFor,
   decideView,
+  deriveStateFor,
   encodeArgs,
   hasFaststart,
   IMAGES_MAX_BYTES,
@@ -321,5 +322,33 @@ describe('hasFaststart', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('deriveStateFor', () => {
+  test('a photo is always skipped, even an oversize one with a view rendition', () => {
+    // Invariant 3: a photo must never render as mid-derivation.
+    expect(deriveStateFor({ kind: 'photo', viewIsOriginal: false, hasProxy: false })).toBe(
+      'skipped',
+    );
+    expect(deriveStateFor({ kind: 'photo', viewIsOriginal: false, hasProxy: true })).toBe(
+      'skipped',
+    );
+  });
+
+  test('a browser-safe video is settled, not pending — no proxy is coming', () => {
+    expect(deriveStateFor({ kind: 'video', viewIsOriginal: true, hasProxy: false })).toBe(
+      'skipped',
+    );
+  });
+
+  test('a video with a proxy is ready', () => {
+    expect(deriveStateFor({ kind: 'video', viewIsOriginal: false, hasProxy: true })).toBe('ready');
+  });
+
+  test('a video with neither is pending — the only case that legitimately is', () => {
+    expect(deriveStateFor({ kind: 'video', viewIsOriginal: false, hasProxy: false })).toBe(
+      'pending',
+    );
   });
 });
