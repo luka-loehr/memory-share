@@ -17,10 +17,13 @@ gallery. memory-share is the third option: your bytes, your account, a link and
 a password, and what comes down the wire is byte-identical to what came off the
 phone.
 
-> **Status: in development.** The CLI, the share-side web app and the owner API
-> are built and independently tested; end-to-end wiring, a real-corpus
-> migration and the security audit are outstanding. Not yet tagged. Read
-> [docs/CONTRACT.md](docs/CONTRACT.md) before depending on anything here.
+> **Status: working, not yet tagged.** Deployed and exercised end to end
+> against a real 284-item, 12.2 GB library — upload, local transcode,
+> derivative upload, tagging, memory creation, gated browsing, video streaming
+> and byte-exact download all verified on live infrastructure. The security and
+> design audits are still outstanding, so read
+> [docs/SECURITY.md](docs/SECURITY.md) before trusting it with anything you
+> would mind leaking.
 
 ## 1. The idea
 
@@ -101,6 +104,26 @@ ms memory create "2 best holidays" --pick a1b2c3,d4e5f6,...
 `ms deploy` provisions into **your** account and is safe to re-run — it detects
 existing resources and reuses them.
 
+### What to expect on a real import
+
+Measured on a 284-item, 12.2 GB iPhone library (239 photos, 45 videos, mostly
+4K HEVC), from a Mac with an 84 Mbps uplink:
+
+| | |
+|---|---|
+| video transcode | 45 proxies, hardware-encoded, ~12 min |
+| upload | 12.3 GB in 51 min at ~4 MB/s |
+| stored | originals + 1.0 GB of proxies; **no photo derivatives** |
+
+**Uploads run at roughly a third of your line rate.** Every byte passes through
+the Worker, because the alternative — presigned URLs — means a URL that serves
+an object without an authorisation check. That tradeoff is deliberate and
+documented in [docs/SECURITY.md](docs/SECURITY.md), but budget for it: a
+terabyte is days, not hours. `--concurrency` helps; the default is conservative.
+
+Interrupted imports resume. Re-running over an unchanged library encodes
+nothing and sends nothing.
+
 ## 5. Uninstalling leaves nothing
 
 ffmpeg ships as platform-specific optional dependencies resolved from
@@ -138,6 +161,7 @@ Full detail, including what is *not* protected, in [docs/SECURITY.md](docs/SECUR
 | [db/migrations/](db/migrations/) | schema, heavily commented |
 | [packages/cli/](packages/cli/) | the `ms` CLI |
 | [apps/web/](apps/web/) | Worker: share pages, share API, owner API |
+| [docs/SECURITY.md](docs/SECURITY.md) | what is protected, and what is not |
 
 ## 8. License
 
