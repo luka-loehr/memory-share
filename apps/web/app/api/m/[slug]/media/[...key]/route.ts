@@ -136,6 +136,11 @@ async function serveTransform(
   /** Whether this memory permits the untouched original to leave at all. */
   mayServeOriginal: boolean,
 ): Promise<Response> {
+  // Transform from the stored bounded rendition when one exists. It only exists
+  // for a source too large for the Images binding to accept, which is exactly
+  // the case where transforming from the original would fail — so this is what
+  // keeps an oversized photo's THUMBNAIL working, not just its view.
+  const source = asset.view_key ?? asset.orig_key;
   const etag = `W/"${asset.id}-${variant}"`;
   const spec = TRANSFORM[variant];
 
@@ -146,7 +151,7 @@ async function serveTransform(
   if (bodyless) return new Response(null, { status: 200, headers });
 
   const images = env.IMAGES;
-  const object = await env.MEDIA.get(asset.orig_key);
+  const object = await env.MEDIA.get(source);
   if (!object || !('body' in object) || !object.body) {
     return json({ error: 'not_found' }, { status: 404 });
   }

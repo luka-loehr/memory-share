@@ -27,7 +27,10 @@ export interface VideoStreamInfo {
   width: number;
   height: number;
   duration: number;
+  /** ffprobe's `format_name`, which is a comma-separated family, not one format. */
   container: string;
+  /** The source file's extension, lowercased and without the dot. */
+  extension?: string;
   /** True when the moov atom already precedes the media data. */
   faststart?: boolean;
 }
@@ -52,8 +55,15 @@ export function decideView(info: VideoStreamInfo): ViewDecision {
   if (codec !== 'h264') {
     return { action: 'encode', reason: `${info.codec} is not H.264` };
   }
+  // ffprobe reports the identical `mov,mp4,m4a,3gp,3g2,mj2` family for a .mov
+  // and a .mp4, so format_name alone cannot tell them apart. The extension is
+  // the only cheap signal that distinguishes them, and a QuickTime container is
+  // not something to hand a browser and hope.
   if (!container.split(',').includes('mp4')) {
     return { action: 'encode', reason: `${info.container} is not an MP4 container` };
+  }
+  if (info.extension !== undefined && !['mp4', 'm4v'].includes(info.extension)) {
+    return { action: 'encode', reason: `.${info.extension} is not an MP4 container` };
   }
   if (info.width > MAX_VIEW_WIDTH || info.height > MAX_VIEW_HEIGHT) {
     return { action: 'encode', reason: `${info.width}×${info.height} is above 1080p` };
@@ -226,6 +236,7 @@ export async function probeVideo(path: string): Promise<VideoStreamInfo | null> 
   if (video === undefined) return null;
 
   return {
+    extension: path.toLowerCase().split('.').pop(),
     codec: video.codec_name ?? 'unknown',
     width: video.width ?? 0,
     height: video.height ?? 0,

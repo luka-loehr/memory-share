@@ -137,11 +137,7 @@ async function receiptPrefix(token: string): Promise<string> {
   return `tmp/parts/${await scopeOf(token)}/`;
 }
 
-export async function writeReceipt(
-  env: Env,
-  token: string,
-  receipt: PartReceipt,
-): Promise<void> {
+export async function writeReceipt(env: Env, token: string, receipt: PartReceipt): Promise<void> {
   const prefix = await receiptPrefix(token);
   await env.MEDIA.put(`${prefix}${String(receipt.part).padStart(5, '0')}`, new Uint8Array(0), {
     customMetadata: { etag: receipt.etag, size: String(receipt.size) },

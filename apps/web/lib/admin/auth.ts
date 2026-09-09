@@ -1,6 +1,6 @@
 import { env as bindings, type Env } from '../env';
-import { timingSafeEqual } from '../password';
 import { json } from '../http';
+import { timingSafeEqual } from '../password';
 
 /**
  * `ADMIN_TOKEN` is a Worker *secret*, never a var — it must not appear in

@@ -1,13 +1,14 @@
 import { describe, expect, test } from 'bun:test';
-import { join } from 'node:path';
+import { stat } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import {
-  PLATFORM_KEYS,
   binaryName,
   bundledDirectory,
   bundledPath,
   clearToolCache,
   findTool,
   isHardware,
+  PLATFORM_KEYS,
   packageNameFor,
   parseEncoders,
   pickEncoder,
@@ -106,12 +107,28 @@ describe('pickEncoder', () => {
 describe('bundled resolution', () => {
   const host = platformKey();
 
-  test('finds the platform package for this host inside node_modules', () => {
+  test('resolves the platform package for this host', () => {
     if (host === null) return;
     const dir = bundledDirectory(host);
     expect(dir).not.toBeNull();
-    expect(dir).toContain('node_modules');
+    // A published install puts the package under node_modules; a workspace
+    // checkout symlinks it, and require.resolve reports the real path. Either
+    // way the directory is the platform package itself.
     expect(dir).toContain(`ffmpeg-${host}`);
+  });
+
+  test('the package is installed under the CLI node_modules, where uninstall reaches it', async () => {
+    if (host === null) return;
+    const link = join(
+      dirname(dirname(Bun.fileURLToPath(import.meta.url))),
+      'node_modules',
+      packageNameFor(host),
+    );
+    expect(
+      await stat(link)
+        .then(() => true)
+        .catch(() => false),
+    ).toBe(true);
   });
 
   test('an unsupported-for-this-host package resolves to a directory or null, never throws', () => {

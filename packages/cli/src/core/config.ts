@@ -18,7 +18,14 @@ export interface Config {
 /** Field names whose values must never reach a log, a --json dump or an error. */
 const SECRET_KEYS = new Set(['adminToken', 'cloudflareApiToken', 'password', 'sessionSecret']);
 
+/**
+ * Everything this CLI writes lives under one directory, so `ms uninstall` has a
+ * single thing to remove and MS_CONFIG_PATH relocates the whole lot rather than
+ * splitting credentials from the caches that belong with them.
+ */
 export function configDir(): string {
+  const override = process.env.MS_CONFIG_PATH;
+  if (override !== undefined && override.trim() !== '') return dirname(override);
   const xdg = process.env.XDG_CONFIG_HOME;
   const base = xdg && xdg.trim() !== '' ? xdg : join(homedir(), '.config');
   return join(base, 'memory-share');

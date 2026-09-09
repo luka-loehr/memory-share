@@ -12,7 +12,7 @@ import { assertSlug, normalizeTag } from '../core/parse.ts';
 import type { Asset } from '../core/types.ts';
 import { mapPool } from '../core/walk.ts';
 import { bold, dim } from '../ui/color.ts';
-import { countAndSize, formatDuration, formatRate } from '../ui/format.ts';
+import { countAndSize, formatBytes, formatDuration, formatRate } from '../ui/format.ts';
 import * as out from '../ui/out.ts';
 import { Progress } from '../ui/progress.ts';
 
@@ -249,8 +249,11 @@ async function downloadOne(
     }
 
     await rename(partPath, finalPath);
-    progress.finish(asset.id, 'downloaded', filename);
-    return { ...base, status: 'downloaded' };
+    // A proxy's size is not the asset's size, so the summary reports what was
+    // actually written rather than what the row claimed.
+    const written = (await sizeOf(finalPath)) ?? expected;
+    progress.finish(asset.id, 'downloaded', filename, formatBytes(written));
+    return { ...base, bytes: written, status: 'downloaded' };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     progress.finish(asset.id, 'failed', filename, message);

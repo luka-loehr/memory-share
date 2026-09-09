@@ -33,7 +33,7 @@ import {
 } from '../core/transcode.ts';
 import type { BeginBody, UploadedPart } from '../core/types.ts';
 import { mapPool, type WalkedFile, walkPaths } from '../core/walk.ts';
-import { cyan, dim } from '../ui/color.ts';
+import { cyan, dim, yellow } from '../ui/color.ts';
 import { countAndSize, formatBytes, formatDuration, formatRate, plural } from '../ui/format.ts';
 import * as out from '../ui/out.ts';
 import { Progress } from '../ui/progress.ts';
@@ -749,9 +749,13 @@ async function reportDryRun(
     out.note(`${duplicates} duplicate ${plural(duplicates, 'path')} collapsed by hash.`);
   }
   for (const plan of plans) {
-    out.line(
-      `  ${plan.action === 'encode' ? cyan('encode') : dim('reuse ')}  ${plan.filename}  ${dim(plan.reason)}`,
-    );
+    const label =
+      plan.action === 'encode'
+        ? cyan('encode')
+        : plan.action === 'unreadable'
+          ? yellow('skip  ')
+          : dim('reuse ');
+    out.line(`  ${label}  ${plan.filename}  ${dim(plan.reason)}`);
   }
   if (tags.length > 0) out.note(`Would tag them ${tags.join(' ')}.`);
   out.note('Files already in the pool are only detectable once upload/begin is called.');
