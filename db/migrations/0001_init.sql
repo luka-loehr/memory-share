@@ -53,8 +53,8 @@ CREATE INDEX assets_taken   ON assets (taken_at);
 CREATE INDEX assets_state   ON assets (derive_state);
 
 -- ------------------------------------------------------------------ tags ----
--- Tags, not folders: one photo belongs to "croatia" AND "with-mom" at once,
--- which is what makes "5 from Croatia + 5 from Turkey" a query rather than a
+-- Tags, not folders: one photo belongs to "beach" AND "family" at once,
+-- which is what makes "5 from #beach + 5 from #mountains" a query rather than a
 -- copy. Tag names are lowercase slugs.
 CREATE TABLE tags (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,

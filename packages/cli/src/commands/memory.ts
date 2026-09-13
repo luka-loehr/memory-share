@@ -125,7 +125,7 @@ async function listMemories(client: ApiClient, args: ParsedArgs): Promise<number
     return 0;
   }
   if (memories.length === 0) {
-    out.note('No memories yet. `ms memory create "Croatia" --tag croatia` makes one.');
+    out.note('No memories yet. `ms memory create "Beach" --tag beach` makes one.');
     return 0;
   }
   out.line(renderTable(memories, memoryColumns()));

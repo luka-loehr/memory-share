@@ -77,7 +77,7 @@ export async function uninstall(args: ParsedArgs): Promise<number> {
   out.line();
   out.note('The CLI itself and its bundled ffmpeg live in node_modules; remove them with your');
   out.note(
-    'package manager, e.g. `bun remove -g @memory-share/cli` or `npm rm -g @memory-share/cli`.',
+    'package manager, e.g. `bun unlink` in packages/cli (source install) or `bun remove -g @memory-share/cli`.',
   );
   return 0;
 }

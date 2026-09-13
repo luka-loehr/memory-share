@@ -569,7 +569,7 @@ async function uploadOne(input: UploadOneInput): Promise<Outcome> {
       role: 'orig',
     };
     // Tells the worker no proxy is coming, so it can settle derive_state now
-    // rather than leaving the video 'pending' indefinitely. See NOTES.md §1.
+    // rather than leaving the video 'pending' indefinitely.
     if (derived?.viewIsOriginal === true) body.viewIsOriginal = true;
     if (probeEnabled) Object.assign(body, await probeFile(candidate.path, candidate.kind));
 

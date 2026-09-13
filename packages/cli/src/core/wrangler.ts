@@ -1,4 +1,5 @@
-import { access, readFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, copyFile, readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import type { Config } from './config.ts';
 import { CliError, EXIT } from './errors.ts';
@@ -92,18 +93,37 @@ export class Wrangler {
 
 const CONFIG_NAMES = ['wrangler.jsonc', 'wrangler.json', 'wrangler.toml'];
 
-/** Walks up from `start` looking for the worker config the deploy belongs to. */
+/**
+ * The repo ships `wrangler.example.jsonc`; the real `wrangler.jsonc` is gitignored
+ * because `ms deploy` writes the account's D1 id into it.
+ */
+const EXAMPLE_NAME = 'wrangler.example.jsonc';
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Walks up from `start` looking for the worker config the deploy belongs to.
+ * A directory holding only the example gets a `wrangler.jsonc` copied from it.
+ */
 export async function findWranglerConfig(start: string): Promise<string> {
   let dir = resolve(start);
   for (let depth = 0; depth < 8; depth++) {
     for (const name of CONFIG_NAMES) {
       const candidate = join(dir, name);
-      try {
-        await access(candidate);
-        return candidate;
-      } catch {
-        // keep looking
-      }
+      if (await exists(candidate)) return candidate;
+    }
+    const example = join(dir, EXAMPLE_NAME);
+    if (await exists(example)) {
+      const target = join(dir, 'wrangler.jsonc');
+      await copyFile(example, target, constants.COPYFILE_EXCL);
+      return target;
     }
     const parent = dirname(dir);
     if (parent === dir) break;

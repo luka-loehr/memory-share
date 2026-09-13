@@ -20,9 +20,9 @@ const SPECS: FlagSpecs = {
 
 describe('parseArgs', () => {
   test('collects positionals and repeated list flags', () => {
-    const args = parseArgs(['a.jpg', 'b.jpg', '--tag', 'croatia', '--tag', 'with-mom'], SPECS);
+    const args = parseArgs(['a.jpg', 'b.jpg', '--tag', 'beach', '--tag', 'with-family'], SPECS);
     expect(args.positionals).toEqual(['a.jpg', 'b.jpg']);
-    expect(getList(args, 'tag')).toEqual(['croatia', 'with-mom']);
+    expect(getList(args, 'tag')).toEqual(['beach', 'with-family']);
   });
 
   test('accepts --flag=value as well as --flag value', () => {

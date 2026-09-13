@@ -3,7 +3,7 @@ import { timingSafeEqual } from './password';
 /**
  * Share sessions are a signed cookie, not a server-side record: there is no
  * session table to grow and no state to replicate. The signature binds the
- * cookie to one slug, so unlocking "croatia" is worth nothing on any other
+ * cookie to one slug, so unlocking "beach-week" is worth nothing on any other
  * memory — invariant 4 in the contract.
  */
 

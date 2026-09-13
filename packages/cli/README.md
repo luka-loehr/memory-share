@@ -3,10 +3,13 @@
 Bun + TypeScript. Talks to the owner API in `docs/CONTRACT.md`, and does the
 video transcoding locally with an ffmpeg it ships itself.
 
-```
+The CLI is not published to npm; install it from a clone of this repository:
+
+```bash
+cd packages/cli
 bun install
-bun run src/index.ts --help
-bun link            # then `ms` is on PATH
+bun link            # puts `ms` on PATH (~/.bun/bin)
+ms --help
 ```
 
 ## Getting started
@@ -25,13 +28,13 @@ versus reused.
 ## Everyday use
 
 ```bash
-ms upload ~/Pictures/croatia --tag croatia --tag with-mom
-ms ls --tag croatia
-ms tag a1b2c3d4 --add favourites
-ms memory create "Croatia 2019" --tag croatia --expires 30d
-ms memory set croatia-2019 --expires 90d
-ms download croatia-2019 ./backup
-ms download --tag croatia --variant view ./proxies   # the 1080p renditions
+ms upload ~/Pictures/beach --tag beach --tag with-family
+ms ls --tag beach
+ms tag a1b2c3d4 --add favorites
+ms memory create "Beach 2019" --tag beach --expires 30d
+ms memory set beach-2019 --expires 90d
+ms download beach-2019 ./backup
+ms download --tag beach --variant view ./proxies   # the 1080p renditions
 ```
 
 Interrupt any upload, encode or download and re-run the same command — finished
@@ -124,11 +127,12 @@ Two things exist on your machine, and they come off separately.
 
 ```bash
 ms uninstall                       # local credentials and caches
-bun remove -g @memory-share/cli    # the CLI and its bundled ffmpeg
-# or: npm rm -g @memory-share/cli
+bun unlink                         # in packages/cli: removes `ms` from PATH
 ```
 
-**A plain package-manager uninstall leaves one thing behind:**
+Deleting the clone afterwards removes the CLI and its bundled ffmpeg.
+
+**Removing the CLI leaves one thing behind:**
 `~/.config/memory-share` — your worker URL, admin token, upload journals, hash
 cache and any cached video proxies. A package manager will not remove a
 directory it did not create. `ms uninstall` removes exactly that directory, and
@@ -167,7 +171,7 @@ directory, not just the file.
 src/cli/        argument parsing and help rendering
 src/core/       config, API client, hashing, resume, ffmpeg resolution,
                 transcoding, probing, wrangler
-src/ui/         colour, formatting, tables, the progress renderer, prompts
+src/ui/         color, formatting, tables, the progress renderer, prompts
 src/commands/   one file per command
 scripts/        vendor-ffmpeg.ts — populates the platform packages at release
 test/           bun test, over the pure logic
@@ -176,7 +180,7 @@ test/           bun test, over the pure logic
 ## Development
 
 ```bash
-bun test          # 171 tests
+bun test          # unit tests over the pure logic
 bun run typecheck # tsc --noEmit, strict
 bun run lint      # biome
 bun run fix       # biome --write
@@ -185,6 +189,3 @@ bun run fix       # biome --write
 bun run scripts/vendor-ffmpeg.ts --platform darwin-arm64
 bun run scripts/vendor-ffmpeg.ts --all
 ```
-
-See `NOTES.md` for the places where the contract and this CLI disagree, and for
-why the ffmpeg bundling is built the way it is.

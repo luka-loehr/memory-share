@@ -10,11 +10,13 @@
   },
   "observability": { "enabled": true },
 
+  // Copy to wrangler.jsonc (gitignored). `ms deploy` does that for you on first run
+  // and writes your account's D1 id into database_id below.
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "memory-share",
-      "database_id": "00000000-0000-0000-0000-000000000000"
+      "database_id": ""
     }
   ],
   "r2_buckets": [

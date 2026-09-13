@@ -20,7 +20,7 @@ export interface ParsedArgs {
 
 /**
  * A small, strict parser. Unknown flags are an error rather than a silent
- * no-op: `ms memory rm croatia --force` should say that the flag is `--yes`,
+ * no-op: `ms memory rm beach-week --force` should say that the flag is `--yes`,
  * not delete the memory while ignoring what the user asked for.
  */
 export function parseArgs(argv: readonly string[], specs: FlagSpecs): ParsedArgs {

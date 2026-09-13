@@ -58,13 +58,13 @@ describe('redact', () => {
 
   test('reaches secrets nested in objects and arrays', () => {
     const redacted = redact({
-      memories: [{ slug: 'croatia', password: 'correct-horse-battery-staple' }],
+      memories: [{ slug: 'beach', password: 'correct-horse-battery-staple' }],
       nested: { deep: { adminToken: 'another-secret-token-here' } },
     });
     const serialised = JSON.stringify(redacted);
     expect(serialised).not.toContain('correct-horse-battery-staple');
     expect(serialised).not.toContain('another-secret-token-here');
-    expect(serialised).toContain('croatia');
+    expect(serialised).toContain('beach');
   });
 
   test('non-objects pass through untouched', () => {

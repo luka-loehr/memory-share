@@ -107,7 +107,7 @@ and stay on different paths.
 | `GET` | `/api/m/:slug/media/<key>` | requires cookie; Range-aware; `?dl=1` for the original |
 | `GET` | `/api/m/:slug/cover` | **no cookie** — heavily dithered cover for the gate |
 
-A session cookie is scoped to one memory: unlocking "Croatia" grants nothing on
+A session cookie is scoped to one memory: unlocking "Beach week" grants nothing on
 "Family dinner". Media keys are validated against membership in *that*
 memory, so knowing a sha256 from one album does not grant it in another.
 
@@ -122,7 +122,7 @@ A derivative:
 - is written to `thumb/<ofAsset>.jpg`, or to `view/<ofAsset>.<ext>` where the
   extension follows the DECLARED MIME, never the role — a `view` is not always
   a video, and naming a photo's rendition `.mp4` would hand a browser an image
-  labelled as video. `view` accepts `video/mp4` and `image/jpeg`; any other
+  labeled as video. `view` accepts `video/mp4` and `image/jpeg`; any other
   mime is refused 400 rather than guessed,
 - creates **no** `assets` row — it is not an asset and must never appear in
   `ms ls`,

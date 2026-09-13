@@ -53,9 +53,9 @@ describe('parseExpiry', () => {
 
 describe('normalizeTag', () => {
   test('lowercases and slugifies', () => {
-    expect(normalizeTag('Croatia')).toBe('croatia');
-    expect(normalizeTag('With Mom')).toBe('with-mom');
-    expect(normalizeTag('with_mom')).toBe('with-mom');
+    expect(normalizeTag('Beach')).toBe('beach');
+    expect(normalizeTag('With Family')).toBe('with-family');
+    expect(normalizeTag('with_family')).toBe('with-family');
     expect(normalizeTag('  Summer   2019!  ')).toBe('summer-2019');
     expect(normalizeTag('a--b')).toBe('a-b');
     expect(normalizeTag('-edges-')).toBe('edges');
@@ -66,7 +66,7 @@ describe('normalizeTag', () => {
   });
 
   test('normalizes and de-duplicates a list', () => {
-    expect(normalizeTags(['Croatia', 'croatia', 'With Mom'])).toEqual(['croatia', 'with-mom']);
+    expect(normalizeTags(['Beach', 'beach', 'With Family'])).toEqual(['beach', 'with-family']);
   });
 });
 
@@ -129,8 +129,8 @@ describe('normalizeBaseUrl', () => {
 
 describe('assertSlug and dedupe', () => {
   test('accepts share slugs and refuses paths', () => {
-    expect(assertSlug('croatia-2019')).toBe('croatia-2019');
-    expect(assertSlug(' Croatia-2019 ')).toBe('croatia-2019');
+    expect(assertSlug('beach-2019')).toBe('beach-2019');
+    expect(assertSlug(' Beach-2019 ')).toBe('beach-2019');
     expect(() => assertSlug('../etc/passwd')).toThrow(UsageError);
     expect(() => assertSlug('-leading')).toThrow(UsageError);
   });

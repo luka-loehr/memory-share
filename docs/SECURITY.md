@@ -17,10 +17,11 @@ them. Anyone who can open a memory can screenshot it.
 
 **One password per memory, PBKDF2-hashed.** Plaintext never reaches the
 database. A generated password is five random dictionary words (~79 bits) —
-long enough that guessing is not a threat worth modelling.
+long enough that guessing is not a threat worth modeling.
 
 **Session cookies are HMAC-signed and scoped to a single memory.** Unlocking
-"Croatia" grants nothing on "Family dinner". The signature is verified
+"Beach week" grants nothing on
+"Family dinner". The signature is verified
 *before* the expiry it protects is trusted, so a token cannot be extended by
 editing it. Media keys are checked against membership in *that* memory, so
 knowing a sha256 from one album is a 404 in another.
@@ -28,11 +29,11 @@ knowing a sha256 from one album is a 404 in another.
 **The R2 bucket has no public URL and no presigned surface.** Every byte —
 uploads included — passes through the Worker behind the admin token or the
 memory's cookie. This costs upload throughput (see below) and is worth it: there
-is no URL anywhere that serves an object without an authorisation check.
+is no URL anywhere that serves an object without an authorization check.
 
 **The owner API is a separate surface.** `/api/admin/*` requires a bearer token
 compared in constant time over SHA-256 digests, is unreachable from a share
-page, and never sets or honours a share cookie.
+page, and never sets or honors a share cookie.
 
 **`allow_download = 0` is a control, not a hint.** No failure path may fall
 back to serving original bytes on a memory that withholds them — when a
@@ -58,7 +59,7 @@ crosses the wire before unlock cannot be un-blurred into a photograph.
 counter per isolate and updates asynchronously — their documentation calls it
 "permissive, eventually consistent, intentionally not an accurate accounting
 system". Measured on a deployment: fourteen sequential attempts, none blocked.
-It is a speed bump. The real control is password entropy, which is why generated
+It slows guessing down but does not stop it. The real control is password entropy, which is why generated
 passwords are five words and why you should not replace one with something
 memorable.
 

@@ -1,8 +1,44 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { backoffDelay, isRetryableStatus } from '../src/core/api.ts';
 import { CliError } from '../src/core/errors.ts';
 import { parseExifDate } from '../src/core/probe.ts';
-import { extractWorkerUrl, setDatabaseId, stripJsonc } from '../src/core/wrangler.ts';
+import {
+  extractWorkerUrl,
+  findWranglerConfig,
+  setDatabaseId,
+  stripJsonc,
+} from '../src/core/wrangler.ts';
+
+describe('findWranglerConfig', () => {
+  test('creates wrangler.jsonc from the example on a fresh clone', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ms-wrangler-'));
+    try {
+      await writeFile(join(dir, 'wrangler.example.jsonc'), '{ "name": "example" }');
+      const nested = join(dir, 'app');
+      await mkdir(nested);
+      const found = await findWranglerConfig(nested);
+      expect(found).toBe(join(dir, 'wrangler.jsonc'));
+      expect(await readFile(found, 'utf8')).toBe('{ "name": "example" }');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('prefers an existing wrangler.jsonc and leaves it untouched', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ms-wrangler-'));
+    try {
+      await writeFile(join(dir, 'wrangler.example.jsonc'), '{ "name": "example" }');
+      await writeFile(join(dir, 'wrangler.jsonc'), '{ "name": "mine" }');
+      const found = await findWranglerConfig(dir);
+      expect(await readFile(found, 'utf8')).toBe('{ "name": "mine" }');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 const CONFIG = `{
   // the worker itself
@@ -69,10 +105,10 @@ describe('extractWorkerUrl', () => {
       'Total Upload: 42.11 KiB / gzip: 9.80 KiB',
       'Uploaded memory-share (2.31 sec)',
       'Deployed memory-share triggers (0.72 sec)',
-      '  https://memory-share.<your-subdomain>.workers.dev',
+      '  https://memory-share.example.workers.dev',
       'Current Version ID: abc-123',
     ].join('\n');
-    expect(extractWorkerUrl(output)).toBe('https://memory-share.<your-subdomain>.workers.dev');
+    expect(extractWorkerUrl(output)).toBe('https://memory-share.example.workers.dev');
   });
 
   test('returns null rather than a wrong guess when there is no URL', () => {
