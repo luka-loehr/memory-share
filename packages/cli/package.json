@@ -1,7 +1,7 @@
 {
   "name": "@memory-share/cli",
   "version": "0.1.0",
-  "description": "ms \u2014 the memory-share command line",
+  "description": "ms — the memory-share command line",
   "type": "module",
   "private": true,
   "bin": {
@@ -23,7 +23,7 @@
     "vendor:ffmpeg": "bun run scripts/vendor-ffmpeg.ts"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.12",
+    "@biomejs/biome": "2.5.15",
     "@types/bun": "latest",
     "typescript": "7.0.2"
   },
