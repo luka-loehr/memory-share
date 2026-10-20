@@ -5,6 +5,12 @@ import { timingSafeEqual } from './password';
  * session table to grow and no state to replicate. The signature binds the
  * cookie to one slug, so unlocking "beach-week" is worth nothing on any other
  * memory — invariant 4 in the contract.
+ *
+ * The signature also covers the memory's current password digest. Rotating the
+ * password is what the owner reaches for when a link went somewhere it should
+ * not have, so it must end every session already unlocked with the old one —
+ * not just refuse new unlocks. The digest is mixed into the signed message
+ * only; it never appears in the cookie.
  */
 
 const encoder = new TextEncoder();
@@ -37,26 +43,38 @@ async function hmacKey(secret: string): Promise<CryptoKey> {
   );
 }
 
-async function sign(secret: string, payload: string): Promise<string> {
-  const sig = await crypto.subtle.sign('HMAC', await hmacKey(secret), encoder.encode(payload));
+/**
+ * HMAC over the payload and the password digest it was unlocked with. A
+ * base64url payload never contains `\n`, so the two parts cannot be shifted
+ * into each other.
+ */
+async function sign(secret: string, payload: string, passwordHash: string): Promise<string> {
+  const message = encoder.encode(`${payload}\n${passwordHash}`);
+  const sig = await crypto.subtle.sign('HMAC', await hmacKey(secret), message);
   return b64url(new Uint8Array(sig));
 }
 
-/** `<b64url payload>.<b64url hmac>`; the payload is slug + expiry, nothing secret. */
+/**
+ * `<b64url payload>.<b64url hmac>`; the payload is slug + expiry, nothing secret.
+ * `passwordHash` is the memory's stored digest at unlock time.
+ */
 export async function mintSession(
   secret: string,
   slug: string,
   ttlSeconds: number,
+  passwordHash: string,
 ): Promise<{ value: string; expires: number }> {
   const expires = Math.floor(Date.now() / 1000) + ttlSeconds;
   const payload = b64url(encoder.encode(JSON.stringify({ s: slug, e: expires })));
-  return { value: `${payload}.${await sign(secret, payload)}`, expires };
+  return { value: `${payload}.${await sign(secret, payload, passwordHash)}`, expires };
 }
 
+/** `passwordHash` is the memory's CURRENT stored digest; a rotated one fails. */
 export async function verifySession(
   secret: string,
   slug: string,
   cookie: string | undefined,
+  passwordHash: string,
 ): Promise<boolean> {
   if (!cookie) return false;
   const dot = cookie.lastIndexOf('.');
@@ -65,7 +83,7 @@ export async function verifySession(
   const payload = cookie.slice(0, dot);
   const provided = cookie.slice(dot + 1);
 
-  const expected = await sign(secret, payload);
+  const expected = await sign(secret, payload, passwordHash);
   if (!timingSafeEqual(encoder.encode(provided), encoder.encode(expected))) return false;
 
   try {

@@ -44,7 +44,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ slug: stri
   }
 
   const ttl = Number(env.SESSION_TTL_SECONDS ?? '43200') || 43200;
-  const { value } = await mintSession(secret, slug, ttl);
+  const { value } = await mintSession(secret, slug, ttl, memory.password_hash);
   await logAccess(env, memory.id, 'unlocked');
 
   return json(

@@ -31,7 +31,7 @@ export async function guard(request: Request, slug: string): Promise<Guarded> {
   }
 
   const cookie = readCookie(request, cookieName(slug));
-  if (!(await verifySession(secret, slug, cookie))) {
+  if (!(await verifySession(secret, slug, cookie, memory.password_hash))) {
     return { ok: false, response: json({ error: 'locked' }, { status: 401 }) };
   }
 

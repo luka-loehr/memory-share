@@ -18,7 +18,7 @@ export default async function MemoryPage({ params }: { params: Promise<{ slug: s
 
   const cookie = (await cookies()).get(cookieName(slug))?.value;
   const unlocked = env.SESSION_SECRET
-    ? await verifySession(env.SESSION_SECRET, slug, cookie)
+    ? await verifySession(env.SESSION_SECRET, slug, cookie, memory.password_hash)
     : false;
 
   if (!unlocked) {

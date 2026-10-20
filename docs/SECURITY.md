@@ -26,6 +26,11 @@ long enough that guessing is not a threat worth modeling.
 editing it. Media keys are checked against membership in *that* memory, so
 knowing a sha256 from one album is a 404 in another.
 
+**Rotating a memory's password ends its sessions.** The cookie signature also
+covers the memory's current password digest (which never appears in the
+cookie), so `ms memory rotate` locks out every browser that unlocked with the
+old password, not just new attempts.
+
 **The R2 bucket has no public URL and no presigned surface.** Every byte —
 uploads included — passes through the Worker behind the admin token or the
 memory's cookie. This costs upload throughput (see below) and is worth it: there
@@ -65,7 +70,9 @@ memorable.
 
 **Logout does not revoke a token.** `POST /api/m/:slug/lock` clears the cookie,
 but a token already issued stays valid until it expires. If one is ever captured
-— a shared machine, a screenshot of devtools — rotate `SESSION_SECRET`:
+— a shared machine, a screenshot of devtools — rotate that memory's password
+(`ms memory rotate`), which ends every session on that memory. For all memories,
+rotate `SESSION_SECRET`:
 
 ```bash
 openssl rand -base64 48 | tr -d '\n' | npx wrangler secret put SESSION_SECRET

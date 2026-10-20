@@ -11,7 +11,8 @@ export const dynamic = 'force-dynamic';
  *
  * The old digest is overwritten, so every link already shared stops working the
  * moment this returns — which is the point: rotation is what you reach for when
- * a link went somewhere it should not have.
+ * a link went somewhere it should not have. Share sessions are signed over the
+ * digest (lib/session.ts), so browsers that already unlocked are locked out too.
  */
 export async function POST(request: Request, ctx: { params: Promise<{ slug: string }> }) {
   const auth = await requireAdmin(request);
