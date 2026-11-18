@@ -2,7 +2,7 @@
 
 # memory-share – Full-resolution photo and video sharing on your own Cloudflare account
 
-[![Bun](https://img.shields.io/badge/Bun-1.4-000000?style=flat&logo=bun&logoColor=white)](https://bun.sh) [![TypeScript](https://img.shields.io/badge/TypeScript-7.0-3178C6?style=flat&logo=typescript&logoColor=white)](https://www.typescriptlang.org) [![Next.js](https://img.shields.io/badge/Next.js-16.3-000000?style=flat&logo=nextdotjs&logoColor=white)](https://nextjs.org) [![Platform](https://img.shields.io/badge/Platform-Cloudflare%20Workers-F38020?style=flat&logo=cloudflare&logoColor=white)](https://developers.cloudflare.com/workers/) [![License](https://img.shields.io/badge/License-MIT-orange?style=flat)](LICENSE)
+[![Bun](https://img.shields.io/badge/Bun-1.4-000000?style=flat&logo=bun&logoColor=white)](https://bun.sh) [![TypeScript](https://img.shields.io/badge/TypeScript-7.0-3178C6?style=flat&logo=typescript&logoColor=white)](https://www.typescriptlang.org) [![Next.js](https://img.shields.io/badge/Next.js-16.4-000000?style=flat&logo=nextdotjs&logoColor=white)](https://nextjs.org) [![Platform](https://img.shields.io/badge/Platform-Cloudflare%20Workers-F38020?style=flat&logo=cloudflare&logoColor=white)](https://developers.cloudflare.com/workers/) [![License](https://img.shields.io/badge/License-MIT-orange?style=flat)](LICENSE)
 
 **memory-share** shares photos and videos through a link and a password, served from your own Cloudflare account. Recipients browse a gallery and can download the original files, byte for byte.
 
