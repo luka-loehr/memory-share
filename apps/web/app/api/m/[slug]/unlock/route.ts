@@ -1,6 +1,6 @@
 import { env as bindings } from '@/lib/env';
 import { sessionSecret } from '@/lib/guard';
-import { json } from '@/lib/http';
+import { json, readBodyText } from '@/lib/http';
 import { findMemory, isExpired, logAccess, recentRejections } from '@/lib/memory';
 import { verifyPassword } from '@/lib/password';
 import { mintSession, sessionCookieHeader } from '@/lib/session';
@@ -10,6 +10,11 @@ export const dynamic = 'force-dynamic';
 /** Guessing budget: 10 wrong passwords per memory per 15 minutes. */
 const RATE_WINDOW_SECONDS = 900;
 const RATE_LIMIT = 10;
+
+/** The body is `{"password": "…"}` and nothing else. */
+const MAX_BODY_BYTES = 4096;
+/** Generated passwords are ~30 characters; longer input is not hashed at all. */
+const MAX_PASSWORD_CHARS = 256;
 
 export async function POST(request: Request, ctx: { params: Promise<{ slug: string }> }) {
   const { slug } = await ctx.params;
@@ -32,8 +37,10 @@ export async function POST(request: Request, ctx: { params: Promise<{ slug: stri
 
   let password = '';
   try {
-    const body = (await request.json()) as { password?: unknown };
-    if (typeof body.password === 'string') password = body.password;
+    const body = JSON.parse(await readBodyText(request, MAX_BODY_BYTES)) as { password?: unknown };
+    if (typeof body.password === 'string' && body.password.length <= MAX_PASSWORD_CHARS) {
+      password = body.password;
+    }
   } catch {
     return json({ error: 'bad_request' }, { status: 400 });
   }

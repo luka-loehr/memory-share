@@ -6,12 +6,23 @@
  * than trusted at the call site.
  */
 
+import { readBodyText } from '../http';
+
 export type Body = Record<string, unknown>;
 
-/** `null` for anything that is not a JSON object — including an empty body. */
-export async function readJson(request: Request): Promise<Body | null> {
+/**
+ * The largest JSON body the owner API reads. The biggest legitimate one is a
+ * membership change of 5000 ids (~340 kB); file bytes never travel as JSON.
+ */
+export const MAX_JSON_BYTES = 1024 * 1024;
+
+/**
+ * `null` for anything that is not a JSON object — including an empty body and
+ * one larger than `maxBytes`.
+ */
+export async function readJson(request: Request, maxBytes = MAX_JSON_BYTES): Promise<Body | null> {
   try {
-    const parsed: unknown = await request.json();
+    const parsed: unknown = JSON.parse(await readBodyText(request, maxBytes));
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
     return parsed as Body;
   } catch {
@@ -25,14 +36,21 @@ export function str(value: unknown, max = 512): string | null {
   return trimmed === '' || trimmed.length > max ? null : trimmed;
 }
 
+/** Digits only: `Number('')` and `Number('  ')` are 0, which is not what an empty field means. */
+function numeric(value: unknown): number {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string' && value.trim() !== '') return Number(value);
+  return NaN;
+}
+
 export function int(value: unknown, min = 0, max = Number.MAX_SAFE_INTEGER): number | null {
-  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  const n = numeric(value);
   if (!Number.isFinite(n) || !Number.isInteger(n) || n < min || n > max) return null;
   return n;
 }
 
 export function num(value: unknown): number | null {
-  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  const n = numeric(value);
   return Number.isFinite(n) ? n : null;
 }
 

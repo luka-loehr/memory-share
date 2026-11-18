@@ -60,13 +60,20 @@ crosses the wire before unlock cannot be un-blurred into a photograph.
 
 ## What does not hold
 
-**Login rate limiting is soft.** Cloudflare's rate-limit binding caches its
-counter per isolate and updates asynchronously — their documentation calls it
-"permissive, eventually consistent, intentionally not an accurate accounting
-system". Measured on a deployment: fourteen sequential attempts, none blocked.
-It slows guessing down but does not stop it. The real control is password entropy, which is why generated
-passwords are five words and why you should not replace one with something
-memorable.
+**Login rate limiting is per memory, not per visitor.** Wrong passwords are
+counted in D1 (`access_log`): after 10 rejections within 15 minutes, every
+unlock attempt on that memory answers `429` until the window has passed. The
+count is read before the attempt is written, so a burst of parallel requests
+can get a few guesses past the limit, and anyone who knows the link can lock
+the memory for its recipients by guessing wrong ten times. It slows guessing
+down; the real control is password entropy, which is why generated passwords
+are five words and why you should not replace one with something memorable.
+
+**Request limits.** The unlock body is read up to 4 kB and a password longer
+than 256 characters is rejected without being hashed. Owner API JSON bodies
+are read up to 1 MB. A path whose slug does not have the shape of a generated
+slug (lowercase words joined by hyphens, at most 80 characters) is answered
+like an unknown memory, without a database query.
 
 **Logout does not revoke a token.** `POST /api/m/:slug/lock` clears the cookie,
 but a token already issued stays valid until it expires. If one is ever captured

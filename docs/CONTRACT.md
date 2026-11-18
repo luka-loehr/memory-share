@@ -101,7 +101,7 @@ and stay on different paths.
 
 | method | path | notes |
 |---|---|---|
-| `POST` | `/api/m/:slug/unlock` | `{password}` → sets `ms_<slug>` HMAC cookie. Rate limited. |
+| `POST` | `/api/m/:slug/unlock` | `{password}` (body ≤ 4 kB, password ≤ 256 chars) → sets `ms_<slug>` HMAC cookie. `401 rejected` for a wrong password or unknown slug, `400 bad_request` for a body that is not JSON, `429 rate_limited` after 10 rejections in 15 min per memory. |
 | `POST` | `/api/m/:slug/lock` | clears it |
 | `GET` | `/api/m/:slug/manifest` | requires cookie → `{title, note, allowDownload, items[]}` |
 | `GET` | `/api/m/:slug/media/<key>` | requires cookie; Range-aware; `?dl=1` for the original |

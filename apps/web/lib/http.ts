@@ -66,6 +66,35 @@ export function etagMatches(ifNoneMatch: string | null, etag: string): boolean {
   return ifNoneMatch.split(',').some((candidate) => normalise(candidate) === want);
 }
 
+/** Thrown by `readBodyText` when a body exceeds its limit. */
+export class BodyTooLarge extends Error {}
+
+/**
+ * Read a request body as text, giving up as soon as it passes `maxBytes`
+ * rather than buffering whatever a stranger chooses to send.
+ */
+export async function readBodyText(request: Request, maxBytes: number): Promise<string> {
+  const declared = request.headers.get('content-length');
+  if (declared !== null && Number(declared) > maxBytes) throw new BodyTooLarge();
+  if (!request.body) return '';
+
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new BodyTooLarge();
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
+}
+
 export function json(body: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(body), {
     ...init,

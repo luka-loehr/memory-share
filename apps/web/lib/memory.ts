@@ -52,7 +52,18 @@ export type Manifest = {
   items: ManifestItem[];
 };
 
+/**
+ * The shape `slugify` produces, plus its collision suffix: lowercase words
+ * joined by single hyphens, 80 characters at most.
+ */
+export function isSlug(value: string): boolean {
+  return value.length <= 80 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value);
+}
+
 export async function findMemory(env: Env, slug: string): Promise<MemoryRow | null> {
+  // No memory was ever stored under another shape, so such a path costs no
+  // query, and nothing but a real slug ends up in a cookie name.
+  if (!isSlug(slug)) return null;
   const row = await env.DB.prepare(
     `SELECT id, slug, title, note, password_hash, cover_asset_id, allow_download, expires_at
        FROM memories WHERE slug = ?1`,
